@@ -175,3 +175,102 @@ def test_helpers():
     assert util.frame_times(5, 2, 360, 36) == [[1.25, 3.75]]
     assert [len(w) for w in util.frame_times(800, 2, 360, 36)] == [36, 36, 36]
     assert util.fmt_ts(3725) == "1:02:05"
+
+
+class _FakeModels:
+    def __init__(self):
+        self.calls = []
+
+    def generate_content(self, model, contents, config):
+        from google.genai import types
+
+        assert isinstance(config, types.GenerateContentConfig)
+        self.calls.append(contents)
+        first = contents[0]
+        if isinstance(first, types.Part) and first.inline_data is not None:  # video excerpt
+            assert first.inline_data.mime_type == "video/mp4" and len(first.inline_data.data) > 1000
+            data = {"title": "Clip", "summary": "s", "tags": ["x"], "transcript": [
+                {"start": 0.5, "end": 2.0, "text": "चलो"}],
+                "moments": [{"start": 0.0, "end": 2.0, "shot_type": "wide", "camera_motion": "static",
+                             "energy": "low", "speech_en": "let's go", "description": "Colour bars on a screen.",
+                             "action": "nothing", "setting": "studio", "people_count": 0, "mood": "calm",
+                             "quality_issues": [], "broll_score": 2, "content_uses": [], "tags": ["bars"]}]}
+        else:  # photos
+            n = sum(1 for c in contents if isinstance(c, types.Part))
+            data = {"photos": [{"index": i + 1, "title": "Orange", "shot_type": "wide", "description": "Orange.",
+                                "action": "", "setting": "", "people_count": 0, "mood": "", "quality_issues": [],
+                                "broll_score": 1, "content_uses": [], "tags": ["orange"]} for i in range(n)]}
+        return SimpleNamespace(
+            usage_metadata=SimpleNamespace(prompt_token_count=1000, candidates_token_count=200, thoughts_token_count=50),
+            prompt_feedback=None, candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+            text=json.dumps(data, ensure_ascii=False))
+
+
+def test_gemini_backend(env, monkeypatch):
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    assert not list(cfg.audio_dir.glob("*.wav")) if cfg.audio_dir.exists() else True  # no audio when Whisper is off
+    fake = SimpleNamespace(models=_FakeModels())
+    monkeypatch.setattr(gemini, "client", lambda cfg: fake)
+    est = gemini.estimate(cfg, conn)
+    assert est["requests"] == 5 and est["usd"] > 0
+
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert stats["done"] == 5 and stats["error"] == 0
+    assert conn.execute("SELECT count(*) FROM media WHERE described=0").fetchone()[0] == 0
+    goa = conn.execute("SELECT md.id FROM media md JOIN locations l ON l.media_id=md.id "
+                       "WHERE l.relpath='2023/goa.mov'").fetchone()["id"]
+    starts = [r[0] for r in conn.execute("SELECT start FROM moments WHERE media_id=? ORDER BY start", (goa,))]
+    assert starts == [0.0, 10.0]  # second excerpt shifted by its 10 s offset
+    tr = conn.execute("SELECT start, text FROM transcript WHERE media_id=? ORDER BY start", (goa,)).fetchall()
+    assert [(t["start"], t["text"]) for t in tr] == [(0.5, "चलो"), (10.5, "चलो")]
+    assert gemini.spent(cfg, conn)["usd"] > 0
+    assert gemini.run(cfg, conn, log=lambda *_: None)["done"] == 0  # nothing left
+
+
+def test_ui_server(env):
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from contentrag.ui import Job, make_handler
+
+    cfg, conn = env
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg, Job(cfg)))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        get = lambda path, **h: urllib.request.urlopen(urllib.request.Request(base + path, headers=h))  # noqa: E731
+        assert b"Content-RAG" in get("/").read()
+        st = json.loads(get("/api/status").read())
+        assert st["media"]["videos"] == 3 and st["backend"] == "gemini"
+        with pytest.raises(urllib.error.HTTPError) as e:  # no CSRF header
+            urllib.request.urlopen(urllib.request.Request(base + "/api/run", data=b'{"step":"scan"}', method="POST"))
+        assert e.value.code == 403
+        with pytest.raises(urllib.error.HTTPError) as e:  # path traversal
+            get("/api/thumb?p=../../../etc/passwd")
+        assert e.value.code == 404
+        mid = conn.execute("SELECT id FROM media WHERE kind='video' LIMIT 1").fetchone()["id"]
+        r = get(f"/api/media/{mid}", Range="bytes=0-99")
+        assert r.status == 206 and len(r.read()) == 100
+        r = urllib.request.urlopen(urllib.request.Request(
+            base + "/api/run", data=b'{"step":"vault"}', method="POST", headers={"X-Crag": "1"}))
+        assert json.loads(r.read())["ok"]
+        for _ in range(50):
+            log = json.loads(get("/api/log").read())
+            if not log["running"]:
+                break
+            import time
+
+            time.sleep(0.1)
+        assert any("vault finished" in line for line in log["lines"])
+        assert json.loads(get("/api/search?q=anything").read())["results"] == []
+    finally:
+        server.shutdown()

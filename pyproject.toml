@@ -5,6 +5,7 @@ description = "Index a personal photo/video archive into a searchable clip index
 requires-python = ">=3.11"
 dependencies = [
   "anthropic>=1.0",
+  "google-genai>=1.40",
   "numpy>=1.26",
   "pillow>=10.1",
 ]
@@ -30,4 +31,4 @@ build-backend = "setuptools.build_meta"
 packages = ["contentrag"]
 
 [tool.setuptools.package-data]
-contentrag = ["*.md"]
+contentrag = ["*.md", "*.html"]

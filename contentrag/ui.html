@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content-RAG</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e3e0;
+  --accent: #2f6fed; --ok: #1f9d55; --warn: #c27c0e; --bad: #d64545; --chip: #efefec;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111113; --panel: #1b1b1e; --ink: #ececef; --muted: #9a9aa2; --line: #2c2c31;
+          --accent: #6b9bff; --ok: #3ccf7f; --warn: #f0b04a; --bad: #ff7272; --chip: #26262b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0; }
+header .sub { color: var(--muted); font-size: 12px; }
+main { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 380px 1fr; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+.row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.row b { font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.ok { background: var(--ok); } .bad { background: var(--bad); } .warn { background: var(--warn); }
+button { font: inherit; border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 7px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.steps { display: grid; gap: 6px; }
+.step { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.step:first-child { border-top: 0; }
+.step small { display: block; color: var(--muted); }
+#log { font: 12px/1.5 ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; height: 260px; overflow: auto; white-space: pre-wrap; }
+.searchbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.searchbar input[type=text] { flex: 1 1 260px; }
+input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--muted); font-size: 12px; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-top: 12px; }
+.card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; background: var(--bg); }
+.card img { width: 100%; height: 150px; object-fit: contain; background: #000; display: block; }
+.card .b { padding: 7px 8px; font-size: 12px; }
+.card .t { color: var(--muted); }
+.chip { display: inline-block; background: var(--chip); border-radius: 5px; padding: 0 5px; margin-right: 3px; font-size: 11px; }
+.empty { color: var(--muted); padding: 20px 0; text-align: center; }
+dialog { border: 0; border-radius: 12px; padding: 0; max-width: min(900px, 95vw); background: var(--panel); color: var(--ink); }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog video { width: 100%; max-height: 70vh; background: #000; display: block; }
+dialog .b { padding: 12px 14px; }
+code { font-size: 11px; word-break: break-all; color: var(--muted); }
+.note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Content-RAG</h1>
+    <div class="sub" id="lib">loading…</div>
+  </div>
+</header>
+<main>
+  <div style="display:grid;gap:16px;align-content:start">
+    <section>
+      <h2>Setup</h2>
+      <div id="setup"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button id="checkKey">Check key &amp; models</button>
+      </div>
+      <div class="note" id="models"></div>
+    </section>
+
+    <section>
+      <h2>Library</h2>
+      <div id="counts"></div>
+    </section>
+
+    <section>
+      <h2>Pipeline</h2>
+      <div class="steps" id="steps"></div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="primary" data-step="all">Run everything</button>
+        <button id="stop">Stop</button>
+      </div>
+      <div class="note">Every step can be re-run: it only processes new or unfinished files.</div>
+    </section>
+
+    <section>
+      <h2>Cost</h2>
+      <div id="cost"><div class="row"><span>Spent so far</span><b>–</b></div></div>
+      <button id="estimate" style="margin-top:6px">Estimate remaining</button>
+      <div id="est" class="note"></div>
+    </section>
+  </div>
+
+  <div style="display:grid;gap:16px;align-content:start">
+    <section>
+      <h2>Search your footage</h2>
+      <form class="searchbar" id="sf">
+        <input type="text" id="q" placeholder="e.g. riding the bike at night, typing on laptop, college friends">
+        <button class="primary">Search</button>
+      </form>
+      <div class="filters">
+        <select id="orientation"><option value="">any orientation</option><option>vertical</option><option>horizontal</option></select>
+        <select id="min_broll"><option value="">any quality</option><option value="3">B-roll ≥ 3</option><option value="4">B-roll ≥ 4</option><option value="5">B-roll 5</option></select>
+        <select id="root"><option value="">all folders</option><option value="archive">life archive</option><option value="brand">brand B-roll</option></select>
+        <select id="kind"><option value="">videos + photos</option><option value="video">videos</option><option value="photo">photos</option></select>
+        from <input id="from" placeholder="2021" size="7"> to <input id="to" placeholder="2023-06" size="7">
+        <label><input type="checkbox" id="noshaky"> no shaky/blurry</label>
+      </div>
+      <div id="results" class="grid"></div>
+    </section>
+
+    <section>
+      <h2>Activity</h2>
+      <div id="log"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="player">
+  <video id="video" controls playsinline></video>
+  <div class="b" id="pinfo"></div>
+  <div class="b" style="padding-top:0"><button onclick="document.getElementById('player').close()">Close</button></div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json", "X-Crag": "1"}, body: JSON.stringify(body || {})});
+
+const STEP_INFO = [
+  ["scan", "Scan drives", "Find files, remove duplicates, read date / GPS"],
+  ["prep", "Prepare", "Thumbnails and scene cuts (local, ffmpeg)"],
+  ["transcribe", "Transcribe", "Whisper on your Mac (optional with Gemini)"],
+  ["describe", "Analyse with AI", "Gemini watches each clip and writes moments"],
+  ["retry", "Retry failed", "Send failed or blocked requests again"],
+  ["embed", "Search index", "Search by meaning (local)"],
+  ["vault", "Build vault", "Obsidian notes: timeline, events, B-roll"],
+];
+$("steps").innerHTML = STEP_INFO.map(([k, t, d]) =>
+  `<div class="step"><div><b>${t}</b><small>${d}</small></div><button data-step="${k}">Run</button></div>`).join("");
+
+document.addEventListener("click", async (e) => {
+  const step = e.target?.dataset?.step;
+  if (!step) return;
+  const r = await post("/api/run", {step});
+  const j = await r.json();
+  if (!j.ok) alert(j.message || j.error);
+  refresh();
+});
+$("stop").onclick = () => post("/api/stop");
+
+let running = false;
+async function refresh() {
+  const s = await (await fetch("/api/status")).json();
+  if (s.error) { $("lib").textContent = s.error; return; }
+  running = s.job.running;
+  $("lib").textContent = `${s.library} · ${s.backend === "gemini" ? "Gemini" : "Claude"} ${s.model}`;
+  $("setup").innerHTML =
+    `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>${esc(s.key_env)}</span><b>${s.key_present ? "found" : "missing"}</b></div>` +
+    (s.key_present ? "" : `<div class="note">Quit, run <code>export ${esc(s.key_env)}=your-key</code> in the terminal, then <code>crag ui</code> again.</div>`) +
+    s.roots.map(r => `<div class="row"><span><span class="dot ${r.mounted ? "ok" : "warn"}"></span>${esc(r.name)} <span class="chip">${esc(r.kind)}</span></span><b>${r.mounted ? "mounted" : "not plugged in"}</b></div>`).join("");
+  const m = s.media, total = m.videos + m.photos, req = s.requests || {};
+  $("counts").innerHTML = [
+    ["Videos", `${m.videos} (${m.hours} h)`], ["Photos", m.photos], ["Duplicates skipped", m.duplicates],
+    ["Prepared", `${m.prepped} / ${total}`], ["Analysed", `${m.described} / ${total}`], ["Moments indexed", s.moments],
+    ["AI requests waiting", (req.pending || 0) + (req.submitted || 0)], ["Failed / blocked", `${req.error || 0} / ${req.refused || 0}`],
+    ["Files with errors", m.errors],
+  ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${esc(v)}</b></div>`).join("");
+  if (s.spent) $("cost").innerHTML = `<div class="row"><span>Spent so far</span><b>$${s.spent.usd.toFixed(2)}</b></div>
+     <div class="row"><span>Tokens in / out</span><b>${(s.spent.input_tokens/1e6).toFixed(2)}M / ${(s.spent.output_tokens/1e6).toFixed(2)}M</b></div>`;
+  document.querySelectorAll("button[data-step]").forEach(b => b.disabled = running);
+  $("stop").disabled = !running;
+}
+
+let logNext = 0;
+async function pollLog() {
+  const j = await (await fetch(`/api/log?since=${logNext}`)).json();
+  if (j.lines.length) {
+    const el = $("log"), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    el.textContent += j.lines.join("\n") + "\n";
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+  logNext = j.next;
+  if (j.running !== running) refresh();
+}
+
+$("estimate").onclick = async () => {
+  $("est").textContent = "calculating…";
+  const e = await (await fetch("/api/estimate")).json();
+  if (e.error) { $("est").textContent = e.error; return; }
+  $("est").innerHTML = e.usd !== undefined
+    ? `${e.requests} requests · ${e.video_hours} h video · ${e.photos} photos → about <b>$${e.usd}</b> with ${esc(e.model)} (rough estimate)`
+    : `${e.requests} requests → about <b>$${e.usd_batch}</b> (batch) with ${esc(e.model)}`;
+};
+
+$("checkKey").onclick = async () => {
+  $("models").textContent = "checking…";
+  const j = await (await fetch("/api/models")).json();
+  if (j.error) { $("models").textContent = "✗ " + j.error; return; }
+  const flash = j.models.filter(m => /flash/.test(m)).slice(0, 12);
+  const has = j.models.includes(j.configured);
+  $("models").innerHTML = `✓ Key works. Configured model <b>${esc(j.configured)}</b> ${has ? "is available" : "was NOT found — pick one below and set it in contentrag.toml"}.<br>Flash models: ${flash.map(m => `<span class="chip">${esc(m)}</span>`).join(" ")}`;
+};
+
+$("sf").onsubmit = async (e) => {
+  e.preventDefault();
+  const p = new URLSearchParams({q: $("q").value, limit: 60});
+  for (const k of ["orientation", "min_broll", "root", "kind", "from", "to"]) if ($(k).value) p.set(k, $(k).value);
+  if ($("noshaky").checked) p.set("exclude", "shaky,blurry");
+  $("results").innerHTML = `<div class="empty">searching…</div>`;
+  const j = await (await fetch("/api/search?" + p)).json();
+  if (j.error) { $("results").innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
+  if (!j.results.length) { $("results").innerHTML = `<div class="empty">No matches yet. Has the "Analyse with AI" step run?</div>`; return; }
+  window._results = j.results;
+  $("results").innerHTML = j.results.map((r, i) => `
+    <div class="card" data-i="${i}">
+      ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy" alt="">` : ""}
+      <div class="b"><b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span><span class="chip">${esc(r.orientation || "")}</span>
+      <div>${esc(r.description)}</div><div class="t">${esc((r.taken_at || "").slice(0, 10))} ${esc(r.place || "")}</div></div>
+    </div>`).join("");
+};
+
+$("results").addEventListener("click", (e) => {
+  const card = e.target.closest(".card");
+  if (!card) return;
+  const r = window._results[+card.dataset.i];
+  const v = $("video");
+  if (r.kind === "video") {
+    v.style.display = "";
+    v.src = `${r.media_url}#t=${r.start},${r.end}`;
+    v.play().catch(() => {});
+  } else { v.pause(); v.removeAttribute("src"); v.style.display = "none"; }
+  $("pinfo").innerHTML = `<b>${esc(r.clip_title || "")}</b> · ${esc(r.in_out)} · ${esc((r.taken_at || "").slice(0, 16))} ${esc(r.place || "")}
+    <p>${esc(r.description)}</p>${r.speech_en ? `<p>“${esc(r.speech_en)}”</p>` : ""}
+    <div>${(r.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>
+    <p><code>${esc(r.file)}</code></p>` + (r.kind === "photo" && r.thumb_url ? `<img src="${r.thumb_url}" style="max-width:100%">` : "");
+  $("player").showModal();
+});
+$("player").addEventListener("close", () => $("video").pause());
+
+refresh();
+setInterval(pollLog, 1500);
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

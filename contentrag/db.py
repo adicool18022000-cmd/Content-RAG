@@ -96,18 +96,24 @@ CREATE TABLE IF NOT EXISTS requests (       -- one Claude request = one video wi
     batch_id   TEXT,
     status     TEXT NOT NULL DEFAULT 'pending',  -- pending|submitted|done|refused|error
     model      TEXT,
-    error      TEXT
+    error      TEXT,
+    in_tokens  INTEGER,
+    out_tokens INTEGER
 );
 """
 
 
-def connect(path: Path) -> sqlite3.Connection:
+def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=not threads, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.executescript(SCHEMA)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
+    for col in ("in_tokens", "out_tokens"):  # added after the first release
+        if col not in cols:
+            conn.execute(f"ALTER TABLE requests ADD COLUMN {col} INTEGER")
     return conn
 
 

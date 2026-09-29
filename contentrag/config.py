@@ -28,6 +28,14 @@ class Config:
     timezone: str = "Asia/Kolkata"
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
     language: str = "hi"
+    transcribe_enabled: bool = True
+    backend: str = "gemini"  # gemini | claude
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_api_key_env: str = "GEMINI_API_KEY"
+    gemini_resolution: str = "low"  # low | medium | high
+    gemini_thinking: str = "low"  # minimal | low | medium | high
+    gemini_fps: float = 1.0
+    gemini_workers: int = 4
     model: str = "claude-opus-5-5"
     effort: str = "low"
     retry_model: str = "claude-sonnet-5-5"
@@ -94,12 +102,24 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     d = raw.get("describe", {})
     p = raw.get("prep", {})
     e = raw.get("embed", {})
+    g = raw.get("gemini", {})
+    backend = d.get("backend", Config.backend)
+    if backend not in ("gemini", "claude"):
+        raise SystemExit("[describe] backend must be 'gemini' or 'claude'.")
     return Config(
         library_dir=Path(raw["library_dir"]).expanduser(),
         roots=roots,
         timezone=raw.get("timezone", "Asia/Kolkata"),
         whisper_model=t.get("model", Config.whisper_model),
         language=t.get("language", Config.language),
+        transcribe_enabled=bool(t.get("enabled", Config.transcribe_enabled)),
+        backend=backend,
+        gemini_model=g.get("model", Config.gemini_model),
+        gemini_api_key_env=g.get("api_key_env", Config.gemini_api_key_env),
+        gemini_resolution=g.get("media_resolution", Config.gemini_resolution),
+        gemini_thinking=g.get("thinking_level", Config.gemini_thinking),
+        gemini_fps=float(g.get("fps", Config.gemini_fps)),
+        gemini_workers=int(g.get("workers", Config.gemini_workers)),
         model=d.get("model", Config.model),
         effort=d.get("effort", Config.effort),
         retry_model=d.get("retry_model", Config.retry_model),

@@ -60,6 +60,16 @@ def cmd_transcribe(args):
 
 def cmd_describe(args):
     cfg, conn = _open(args)
+    if cfg.backend == "gemini" and args.action in ("estimate", "run", "retry"):
+        from . import gemini
+
+        if args.action == "estimate":
+            print(json.dumps(gemini.estimate(cfg, conn), indent=2))
+        else:
+            print(json.dumps(gemini.run(cfg, conn, limit=args.limit, retry=args.action == "retry"), indent=2))
+        return
+    if args.action == "run":
+        raise SystemExit("'describe run' is for backend = \"gemini\"; with Claude use submit/collect.")
     if args.action == "estimate":
         print(json.dumps(describe_mod.estimate(cfg, conn, args.model), indent=2))
     elif args.action == "submit":
@@ -111,11 +121,26 @@ def cmd_vault(args):
     print(json.dumps(build_vault(cfg, conn), indent=2))
 
 
+def cmd_ui(args):
+    from .ui import serve
+
+    serve(load_config(args.config), port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_run(args):
-    """scan -> prep -> transcribe -> describe submit (the batch finishes later)."""
-    for fn in (cmd_scan, cmd_prep, cmd_transcribe):
-        fn(args)
+    """scan -> prep -> transcribe -> describe."""
+    cmd_scan(args)
+    cmd_prep(args)
     cfg, conn = _open(args)
+    if cfg.transcribe_enabled:
+        cmd_transcribe(args)
+    if cfg.backend == "gemini":
+        from . import gemini
+
+        print(json.dumps(gemini.estimate(cfg, conn), indent=2))
+        if args.yes or input("Send these to Gemini? [y/N] ").strip().lower() == "y":
+            print(json.dumps(gemini.run(cfg, conn), indent=2))
+        return
     print(json.dumps(describe_mod.estimate(cfg, conn), indent=2))
     if args.yes or input("Submit these to Claude? [y/N] ").strip().lower() == "y":
         print(describe_mod.submit(cfg, conn))
@@ -135,7 +160,8 @@ def main(argv=None):
         sp.set_defaults(fn=fn)
 
     sp = sub.add_parser("describe", help="Claude descriptions of moments")
-    sp.add_argument("action", choices=["estimate", "submit", "collect", "sync", "retry"])
+    sp.add_argument("action", choices=["estimate", "run", "submit", "collect", "sync", "retry"],
+                    help="gemini: estimate | run | retry.  claude: estimate | submit | collect | sync | retry")
     sp.add_argument("--limit", type=int)
     sp.add_argument("--model")
     sp.set_defaults(fn=cmd_describe)
@@ -162,7 +188,12 @@ def main(argv=None):
 
     sub.add_parser("vault", help="rebuild the Obsidian vault's generated notes").set_defaults(fn=cmd_vault)
 
-    sp = sub.add_parser("run", help="scan + prep + transcribe + submit to Claude")
+    sp = sub.add_parser("ui", help="local dashboard in your browser (http://127.0.0.1:8765)")
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--no-browser", action="store_true")
+    sp.set_defaults(fn=cmd_ui)
+
+    sp = sub.add_parser("run", help="scan + prep + transcribe + describe")
     sp.add_argument("--limit", type=int)
     sp.add_argument("-y", "--yes", action="store_true")
     sp.set_defaults(fn=cmd_run)

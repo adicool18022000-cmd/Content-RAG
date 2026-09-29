@@ -200,7 +200,8 @@ def plan_requests(cfg: Config, conn) -> int:
     created = 0
     queued = {r["custom_id"] for r in conn.execute("SELECT custom_id FROM requests")}
     for m in conn.execute(
-        "SELECT id, duration FROM media WHERE kind='video' AND prepped=1 AND transcribed=1 AND described=0"
+        "SELECT id, duration FROM media WHERE kind='video' AND prepped=1 AND (transcribed=1 OR ?) AND described=0",
+        (int(not cfg.transcribe_enabled),),
     ).fetchall():
         for w in range(_num_windows(cfg, m["duration"])):
             cid = f"v{m['id']}w{w}"

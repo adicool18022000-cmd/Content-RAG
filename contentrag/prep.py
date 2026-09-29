@@ -59,7 +59,7 @@ def prep_video(cfg: Config, row, src: Path) -> dict:
             frames.append((0.0, out.relative_to(cfg.library_dir).as_posix()))
     cuts = detect_cuts(src) if cfg.scene_detect else []
     audio = None
-    if row["has_audio"] and not row["transcribed"]:
+    if row["has_audio"] and not row["transcribed"] and cfg.transcribe_enabled:
         wav = cfg.audio_dir / f"{row['id']}.wav"
         if wav.exists() or extract_audio(src, wav):
             audio = wav

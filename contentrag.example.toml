@@ -29,12 +29,22 @@ path = "/Volumes/SSD1/Brand_Broll"
 kind = "brand"
 
 [transcribe]
+# Local Whisper transcription. Optional when describing with Gemini, which
+# listens to the audio itself; keep it on if you want a separate
+# Whisper transcript as well.
+enabled = false
 # mlx-whisper model (runs on Apple Silicon). turbo is ~8x faster than
 # large-v3 with similar Hindi quality.
 model = "mlx-community/whisper-large-v3-turbo"
 language = "hi"
 
 [describe]
+# Which AI watches the footage:
+#   "gemini" -> sends a small 360p copy of each clip (video + audio) to Gemini.
+#               Cheapest; needs GEMINI_API_KEY. Settings in [gemini] below.
+#   "claude" -> sends frame contact sheets to Claude via the Batches API.
+backend = "gemini"
+# Claude settings (used only when backend = "claude").
 # Claude model that looks at the frames. Opus 5.5 gives the best
 # descriptions; "claude-sonnet-5-5" costs about half. Run
 # `crag describe estimate` before submitting.
@@ -42,6 +52,23 @@ model = "claude-opus-5-5"
 effort = "low"
 # Model used to retry the few requests the first model declines.
 retry_model = "claude-sonnet-5-5"
+
+[gemini]
+# gemini-3.5-flash gives better descriptions; gemini-3.5-flash-lite costs about
+# a third as much. The dashboard's "Check key" button lists the model names
+# your key can use.
+model = "gemini-3.5-flash"
+# Environment variable that holds the key (never put the key in this file
+# if you share it).
+api_key_env = "GEMINI_API_KEY"
+# low ~100 tokens per second of video, medium/high ~300. Low is enough
+# to describe footage and costs a third as much.
+media_resolution = "low"
+# Frames per second Gemini looks at (1 is its default).
+fps = 1.0
+thinking_level = "low"
+# Parallel requests.
+workers = 4
 
 [prep]
 # Frames sampled per video: one every `min_interval` seconds, but at most
