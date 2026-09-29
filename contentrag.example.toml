@@ -1,0 +1,58 @@
+# Copy to contentrag.toml and edit. Paths are absolute paths on your Mac.
+
+# Where the index lives: database, frames, thumbnails, Obsidian vault.
+# Put it on the faster / emptier SSD. ~2-4% of footage size is plenty.
+library_dir = "/Volumes/SSD1/ContentLibrary"
+
+# Your local timezone, used when a clip only has a UTC timestamp.
+timezone = "Asia/Kolkata"
+
+# Every folder of footage to index. `name` is a stable label: files are
+# remembered as (name, path-inside-root), so a drive can be mounted at a
+# different path later without re-indexing. Roots that are not mounted
+# are skipped, so footage can live across several SSDs.
+#   kind = "archive" -> life footage (college, trips, family...)
+#   kind = "brand"   -> clips shot on purpose for content (laptop, notebook, bike...)
+[[roots]]
+name = "ssd1-archive"
+path = "/Volumes/SSD1/Archive"
+kind = "archive"
+
+[[roots]]
+name = "ssd2-archive"
+path = "/Volumes/SSD2/Archive"
+kind = "archive"
+
+[[roots]]
+name = "brand-broll"
+path = "/Volumes/SSD1/Brand_Broll"
+kind = "brand"
+
+[transcribe]
+# mlx-whisper model (runs on Apple Silicon). turbo is ~8x faster than
+# large-v3 with similar Hindi quality.
+model = "mlx-community/whisper-large-v3-turbo"
+language = "hi"
+
+[describe]
+# Claude model that looks at the frames. Opus 5.5 gives the best
+# descriptions; "claude-sonnet-5-5" costs about half. Run
+# `crag describe estimate` before submitting.
+model = "claude-opus-5-5"
+effort = "low"
+# Model used to retry the few requests the first model declines.
+retry_model = "claude-sonnet-5-5"
+
+[prep]
+# Frames sampled per video: one every `min_interval` seconds, but at most
+# `frames_per_window` per `window_seconds` of footage (longer clips are
+# sampled more sparsely and split into several Claude requests).
+min_interval = 2.0
+window_seconds = 360
+frames_per_window = 36
+scene_detect = true
+workers = 4
+
+[embed]
+# Multilingual (Hindi + English) text embedding model, runs locally.
+model = "BAAI/bge-m3"

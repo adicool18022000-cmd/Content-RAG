@@ -1,0 +1,33 @@
+[project]
+name = "contentrag"
+version = "0.1.0"
+description = "Index a personal photo/video archive into a searchable clip index and an Obsidian life vault."
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=1.0",
+  "numpy>=1.26",
+  "pillow>=10.1",
+]
+
+[project.optional-dependencies]
+# Apple Silicon: local Whisper transcription (Hindi/Hinglish).
+mac = [
+  "mlx-whisper>=0.4",
+  "pillow-heif>=0.16",
+  "reverse_geocoder>=1.5",
+  "sentence-transformers>=3.0",
+]
+dev = ["pytest>=8"]
+
+[project.scripts]
+crag = "contentrag.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["contentrag"]
+
+[tool.setuptools.package-data]
+contentrag = ["*.md"]

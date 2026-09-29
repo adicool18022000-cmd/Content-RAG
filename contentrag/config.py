@@ -1,0 +1,113 @@
+"""Load contentrag.toml."""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+DEFAULT_CONFIG = "contentrag.toml"
+
+
+@dataclass
+class Root:
+    name: str
+    path: Path
+    kind: str = "archive"  # "archive" or "brand"
+
+    @property
+    def mounted(self) -> bool:
+        return self.path.is_dir()
+
+
+@dataclass
+class Config:
+    library_dir: Path
+    roots: list[Root]
+    timezone: str = "Asia/Kolkata"
+    whisper_model: str = "mlx-community/whisper-large-v3-turbo"
+    language: str = "hi"
+    model: str = "claude-opus-5-5"
+    effort: str = "low"
+    retry_model: str = "claude-sonnet-5-5"
+    min_interval: float = 2.0
+    window_seconds: float = 360.0
+    frames_per_window: int = 36
+    scene_detect: bool = True
+    workers: int = 4
+    embed_model: str = "BAAI/bge-m3"
+    source: Path | None = field(default=None, repr=False)
+
+    @property
+    def db_path(self) -> Path:
+        return self.library_dir / "index.sqlite"
+
+    @property
+    def frames_dir(self) -> Path:
+        return self.library_dir / "frames"
+
+    @property
+    def audio_dir(self) -> Path:
+        return self.library_dir / "audio"
+
+    @property
+    def vault_dir(self) -> Path:
+        return self.library_dir / "LifeVault"
+
+    @property
+    def vectors_path(self) -> Path:
+        return self.library_dir / "vectors.npz"
+
+    def root(self, name: str) -> Root | None:
+        return next((r for r in self.roots if r.name == name), None)
+
+    def resolve(self, root_name: str, relpath: str) -> Path | None:
+        root = self.root(root_name)
+        if root is None:
+            return None
+        return root.path / relpath
+
+
+def load_config(path: str | os.PathLike | None = None) -> Config:
+    path = Path(path or os.environ.get("CONTENTRAG_CONFIG", DEFAULT_CONFIG)).expanduser()
+    if not path.exists():
+        raise SystemExit(
+            f"Config not found: {path}\n"
+            "Copy contentrag.example.toml to contentrag.toml and edit the paths."
+        )
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    roots = [
+        Root(name=r["name"], path=Path(r["path"]).expanduser(), kind=r.get("kind", "archive"))
+        for r in raw.get("roots", [])
+    ]
+    names = [r.name for r in roots]
+    if len(names) != len(set(names)):
+        raise SystemExit("Each [[roots]] entry needs a unique name.")
+    for r in roots:
+        if r.kind not in ("archive", "brand"):
+            raise SystemExit(f"Root {r.name}: kind must be 'archive' or 'brand'.")
+
+    t = raw.get("transcribe", {})
+    d = raw.get("describe", {})
+    p = raw.get("prep", {})
+    e = raw.get("embed", {})
+    return Config(
+        library_dir=Path(raw["library_dir"]).expanduser(),
+        roots=roots,
+        timezone=raw.get("timezone", "Asia/Kolkata"),
+        whisper_model=t.get("model", Config.whisper_model),
+        language=t.get("language", Config.language),
+        model=d.get("model", Config.model),
+        effort=d.get("effort", Config.effort),
+        retry_model=d.get("retry_model", Config.retry_model),
+        min_interval=float(p.get("min_interval", Config.min_interval)),
+        window_seconds=float(p.get("window_seconds", Config.window_seconds)),
+        frames_per_window=int(p.get("frames_per_window", Config.frames_per_window)),
+        scene_detect=bool(p.get("scene_detect", Config.scene_detect)),
+        workers=int(p.get("workers", Config.workers)),
+        embed_model=e.get("model", Config.embed_model),
+        source=path,
+    )
