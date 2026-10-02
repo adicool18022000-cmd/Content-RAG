@@ -77,6 +77,12 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
       <div id="counts"></div>
     </section>
 
+    <section id="failbox" style="display:none">
+      <h2>Problems</h2>
+      <div id="fails"></div>
+      <div class="note">Fix the cause, then click "Retry failed".</div>
+    </section>
+
     <section>
       <h2>Pipeline</h2>
       <div class="steps" id="steps"></div>
@@ -170,6 +176,12 @@ async function refresh() {
     ["AI requests waiting", (req.pending || 0) + (req.submitted || 0)], ["Failed / blocked", `${req.error || 0} / ${req.refused || 0}`],
     ["Files with errors", m.errors],
   ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${esc(v)}</b></div>`).join("");
+  const fl = s.failures || [];
+  $("failbox").style.display = fl.length ? "" : "none";
+  $("fails").innerHTML = fl.map(f => `<div style="padding:6px 0;border-top:1px solid var(--line)">
+      <b>${esc(f.file || f.request)}</b> <span class="chip">${esc(f.status)}</span>
+      ${f.duration_s != null ? `<span class="chip">${f.duration_s}s · ${f.size_mb} MB</span>` : ""}
+      <div class="note" style="margin-top:2px;color:var(--bad)">${esc(f.error)}</div></div>`).join("");
   if (s.spent) $("cost").innerHTML = `<div class="row"><span>Spent so far</span><b>$${s.spent.usd.toFixed(2)}</b></div>
      <div class="row"><span>Tokens in / out</span><b>${(s.spent.input_tokens/1e6).toFixed(2)}M / ${(s.spent.output_tokens/1e6).toFixed(2)}M</b></div>`;
   document.querySelectorAll("button[data-step]").forEach(b => b.disabled = running);

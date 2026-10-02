@@ -274,3 +274,68 @@ def test_ui_server(env):
         assert json.loads(get("/api/search?q=anything").read())["results"] == []
     finally:
         server.shutdown()
+
+
+def test_gemini_failures(env, monkeypatch):
+    """Inline failures fall back to the Files API, long answers drop the transcript,
+    and repeated quota errors stop the run with an explanation."""
+    from google.genai import errors
+
+    from contentrag import gemini
+    from contentrag.db import failures
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_workers = 1
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini.time, "sleep", lambda s: None)
+    good = _FakeModels()
+    state = {"inline_fail": True, "max_tokens_once": True}
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            part = contents[0]
+            if getattr(part, "inline_data", None) is not None and state["inline_fail"]:
+                raise errors.ServerError(500, {"error": {"code": 500, "message": "Internal error", "status": "INTERNAL"}})
+            schema = config.response_json_schema
+            if "transcript" in schema.get("properties", {}) and state["max_tokens_once"]:
+                state["max_tokens_once"] = False
+                return SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=5,
+                                                                      thoughts_token_count=0),
+                                       prompt_feedback=None, text='{"title": "trunc',
+                                       candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="MAX_TOKENS"))])
+            if getattr(part, "file_data", None) is not None:  # Files API route: hand the fake an inline-looking part
+                from google.genai import types
+                contents = [types.Part(inline_data=types.Blob(data=b"x" * 2000, mime_type="video/mp4")), *contents[1:]]
+            return good.generate_content(model, contents, config)
+
+    class Files:
+        def upload(self, file, config):
+            return SimpleNamespace(name="files/1", uri="https://example/files/1", state=SimpleNamespace(name="ACTIVE"))
+
+        def delete(self, name):
+            pass
+
+    fake = SimpleNamespace(models=Models(), files=Files())
+    monkeypatch.setattr(gemini, "client", lambda cfg: fake)
+    lines = []
+    stats = gemini.run(cfg, conn, log=lines.append)
+    assert stats["done"] == 5 and stats["error"] == 0, lines
+
+    # quota: every call 429 -> run stops after 3 and the reason is recorded
+    conn.execute("UPDATE requests SET status='pending'")
+    conn.execute("UPDATE media SET described=0")
+    conn.commit()
+
+    class Quota:
+        def generate_content(self, model, contents, config):
+            raise errors.ClientError(429, {"error": {"code": 429, "message": "Resource exhausted", "status": "RESOURCE_EXHAUSTED"}})
+
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=Quota(), files=Files()))
+    lines = []
+    stats = gemini.run(cfg, conn, log=lines.append)
+    assert stats["error"] == 3 and stats["done"] == 0
+    assert any("stopping" in l for l in lines)
+    f = failures(conn)
+    assert f and "429" in f[0]["error"] and "billing" in f[0]["error"] and f[0]["file"]

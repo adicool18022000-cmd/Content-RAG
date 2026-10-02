@@ -158,3 +158,24 @@ def reindex_fts(conn: sqlite3.Connection, media_id: str | None = None) -> None:
             for r in rows
         ],
     )
+
+
+def failures(conn, limit: int = 50) -> list[dict]:
+    """Failed / blocked AI requests with the file they belong to and the reason."""
+    out = []
+    for r in conn.execute(
+        "SELECT custom_id, kind, payload, status, error FROM requests WHERE status IN ('error','refused') "
+        "ORDER BY custom_id LIMIT ?", (limit,)):
+        payload = jloads(r["payload"], {})
+        mid = payload.get("media_id") or (payload.get("media_ids") or [None])[0]
+        m = conn.execute("SELECT relpath, duration, size FROM media WHERE id=?", (mid,)).fetchone() if mid else None
+        out.append({
+            "request": r["custom_id"], "status": r["status"], "error": r["error"] or "(no message recorded)",
+            "file": m["relpath"] if m else None,
+            "duration_s": round(m["duration"] or 0) if m else None,
+            "size_mb": round((m["size"] or 0) / 1e6) if m else None,
+        })
+    for m in conn.execute("SELECT relpath, error FROM media WHERE error IS NOT NULL LIMIT ?", (limit,)):
+        out.append({"request": None, "status": "file", "error": m["error"], "file": m["relpath"],
+                    "duration_s": None, "size_mb": None})
+    return out

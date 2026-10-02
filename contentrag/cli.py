@@ -34,7 +34,15 @@ def cmd_status(args):
           f"errors {q('SELECT count(*) FROM media WHERE error IS NOT NULL')}")
     print(f"Moments: {q('SELECT count(*) FROM moments')}")
     for row in conn.execute("SELECT status, count(*) n FROM requests GROUP BY status"):
-        print(f"  Claude requests {row['status']}: {row['n']}")
+        print(f"  AI requests {row['status']}: {row['n']}")
+    from .db import failures
+
+    fails = failures(conn)
+    if fails:
+        print("Problems:")
+        for f in fails:
+            extra = f" ({f['duration_s']} s, {f['size_mb']} MB)" if f["duration_s"] is not None else ""
+            print(f"  [{f['status']}] {f['file']}{extra}\n      {f['error']}")
 
 
 def cmd_scan(args):

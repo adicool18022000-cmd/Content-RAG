@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import Config
-from .db import connect
+from .db import connect, failures
 from .util import source_path
 
 HTML = Path(__file__).with_name("ui.html")
@@ -143,6 +143,7 @@ def status(cfg: Config, job: Job) -> dict:
             "requests": {r["status"]: r["n"] for r in conn.execute(
                 "SELECT status, count(*) n FROM requests GROUP BY status")},
             "job": {"name": job.name, "running": job.running},
+            "failures": failures(conn, 30),
         }
         out["key_present"] = bool(os.environ.get(out["key_env"]))
         if cfg.backend == "gemini":

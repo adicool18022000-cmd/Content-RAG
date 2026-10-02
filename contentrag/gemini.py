@@ -21,7 +21,7 @@ from .config import Config
 from .describe import PHOTO_SCHEMA, VIDEO_SCHEMA, plan_requests, store_result
 from .util import fmt_ts, source_path
 
-INLINE_LIMIT = 14 * 1024 * 1024  # stay under the 20 MB request cap after base64
+INLINE_LIMIT = 8 * 1024 * 1024  # bigger proxies go through the Files API (more reliable for long clips)
 TOKENS_PER_SECOND = {"low": 100, "medium": 300, "high": 300}
 # $/MTok (input, output) at standard rates.
 PRICES = {
@@ -115,12 +115,36 @@ def _config(cfg: Config, schema: dict):
         response_json_schema=schema,
         media_resolution=f"MEDIA_RESOLUTION_{cfg.gemini_resolution.upper()}",
         thinking_config=types.ThinkingConfig(thinking_level=cfg.gemini_thinking.upper()),
-        max_output_tokens=32768,
+        max_output_tokens=65536,
     )
 
 
+class GeminiError(RuntimeError):
+    def __init__(self, message: str, code: int | None = None):
+        super().__init__(message)
+        self.code = code
+
+
+def _explain(e) -> GeminiError:
+    code = getattr(e, "code", None)
+    status = getattr(e, "status", "") or ""
+    msg = (getattr(e, "message", None) or str(e)).strip().replace("\n", " ")[:300]
+    hint = ""
+    if code == 429:
+        hint = (" — Gemini quota / rate limit. If the key's Google project has no billing enabled it is on the"
+                " free tier, which allows only a few requests per day: enable billing in AI Studio, or wait.")
+    elif code in (500, 503, 504):
+        hint = " — Gemini was overloaded or timed out; usually works when retried later."
+    elif code in (401, 403):
+        hint = " — the API key was rejected or lacks access to this model."
+    elif code == 404:
+        hint = " — model not found; use 'Check key & models' and set [gemini] model in contentrag.toml."
+    return GeminiError(f"Gemini {code} {status}: {msg}{hint}", code)
+
+
 def _call(gclient, cfg: Config, contents, schema: dict) -> tuple[dict | None, str, dict]:
-    """Returns (data, status, usage). Retries rate limits and server errors."""
+    """Returns (data, status, usage); usage["error"] explains a non-'done' status.
+    Retries rate limits and server errors with backoff, then raises GeminiError."""
     from google.genai import errors
 
     delay = 5.0
@@ -132,25 +156,44 @@ def _call(gclient, cfg: Config, contents, schema: dict) -> tuple[dict | None, st
         except errors.APIError as e:
             code = getattr(e, "code", None)
             if code in (429, 500, 502, 503, 504) and attempt < 4:
-                time.sleep(delay)
+                time.sleep(delay * (3 if code == 429 else 1))
                 delay *= 2
                 continue
-            raise
+            raise _explain(e) from e
     um = resp.usage_metadata
     usage = {
         "in": getattr(um, "prompt_token_count", 0) or 0,
         "out": (getattr(um, "candidates_token_count", 0) or 0) + (getattr(um, "thoughts_token_count", 0) or 0),
     }
-    if resp.prompt_feedback is not None and getattr(resp.prompt_feedback, "block_reason", None):
-        return None, "refused", usage
+    block = getattr(resp.prompt_feedback, "block_reason", None) if resp.prompt_feedback is not None else None
+    if block:
+        return None, "refused", {**usage, "error": f"blocked by Gemini: {getattr(block, 'name', block)}"}
     cand = resp.candidates[0] if resp.candidates else None
     reason = getattr(getattr(cand, "finish_reason", None), "name", "") if cand else "NO_CANDIDATE"
     if reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT"):
-        return None, "refused", usage
+        return None, "refused", {**usage, "error": f"blocked by Gemini: {reason}"}
+    if reason == "MAX_TOKENS":
+        return None, "error", {**usage, "error": "answer too long (MAX_TOKENS)", "max_tokens": True}
     try:
         return json.loads(resp.text or ""), "done", usage
     except json.JSONDecodeError:
-        return None, "error", usage
+        return None, "error", {**usage, "error": f"invalid JSON in answer (finish reason {reason or 'unknown'})"}
+
+
+def _upload(gclient, proxy: Path):
+    uploaded = gclient.files.upload(file=str(proxy), config={"mime_type": "video/mp4"})
+    waited = 0
+    while uploaded.state.name == "PROCESSING" and waited < 600:
+        time.sleep(5)
+        waited += 5
+        uploaded = gclient.files.get(name=uploaded.name)
+    if uploaded.state.name != "ACTIVE":
+        raise GeminiError(f"Gemini could not process the uploaded video (state {uploaded.state.name})")
+    return uploaded
+
+
+def _merge_usage(a: dict, b: dict) -> dict:
+    return {**b, "in": a.get("in", 0) + b.get("in", 0), "out": a.get("out", 0) + b.get("out", 0)}
 
 
 def _video_job(gclient, cfg: Config, spec: dict, tmp: Path) -> tuple[dict | None, str, dict]:
@@ -161,26 +204,44 @@ def _video_job(gclient, cfg: Config, spec: dict, tmp: Path) -> tuple[dict | None
     uploaded = None
     try:
         vmeta = types.VideoMetadata(fps=cfg.gemini_fps)
-        if proxy.stat().st_size <= INLINE_LIMIT:
-            part = types.Part(inline_data=types.Blob(data=proxy.read_bytes(), mime_type="video/mp4"),
+
+        def file_part():
+            nonlocal uploaded
+            if uploaded is None:
+                uploaded = _upload(gclient, proxy)
+            return types.Part(file_data=types.FileData(file_uri=uploaded.uri, mime_type="video/mp4"),
                               video_metadata=vmeta)
-        else:
-            uploaded = gclient.files.upload(file=str(proxy), config={"mime_type": "video/mp4"})
-            waited = 0
-            while uploaded.state.name == "PROCESSING" and waited < 600:
-                time.sleep(5)
-                waited += 5
-                uploaded = gclient.files.get(name=uploaded.name)
-            if uploaded.state.name != "ACTIVE":
-                raise RuntimeError(f"Gemini file processing ended in state {uploaded.state.name}")
-            part = types.Part(file_data=types.FileData(file_uri=uploaded.uri, mime_type="video/mp4"),
-                              video_metadata=vmeta)
-        schema = VIDEO_SCHEMA
-        if spec["want_transcript"]:
+
+        def schema_for(transcript: bool) -> dict:
+            if not transcript:
+                return VIDEO_SCHEMA
             schema = json.loads(json.dumps(VIDEO_SCHEMA))
             schema["properties"]["transcript"] = TRANSCRIPT_PROP
             schema["required"] = [*schema["required"], "transcript"]
-        return _call(gclient, cfg, [part, spec["header"]], schema)
+            return schema
+
+        want_tr = spec["want_transcript"]
+        header = spec["header"]
+        if proxy.stat().st_size <= INLINE_LIMIT:
+            part = types.Part(inline_data=types.Blob(data=proxy.read_bytes(), mime_type="video/mp4"),
+                              video_metadata=vmeta)
+            try:
+                data, status, usage = _call(gclient, cfg, [part, header], schema_for(want_tr))
+            except GeminiError as e:
+                if e.code in (429, 401, 403, 404):
+                    raise
+                # inline video rejected or timed out: try the Files API route once
+                part = file_part()
+                data, status, usage = _call(gclient, cfg, [part, header], schema_for(want_tr))
+        else:
+            part = file_part()
+            data, status, usage = _call(gclient, cfg, [part, header], schema_for(want_tr))
+        if usage.get("max_tokens") and want_tr:
+            # long talky clip: ask again without the verbatim transcript (speech_en gists remain)
+            header = header.replace("Also return `transcript`.", "")
+            data, status, usage2 = _call(gclient, cfg, [part, header], schema_for(False))
+            usage = _merge_usage(usage, usage2)
+        return data, status, usage
     finally:
         proxy.unlink(missing_ok=True)
         if uploaded is not None:
@@ -231,6 +292,7 @@ def _specs(cfg: Config, conn, reqs) -> list[dict]:
             specs.append({"custom_id": req["custom_id"], "req": req, "kind": "video", "src": src,
                           "start": start, "end": end, "offset": start, "has_audio": bool(m["has_audio"]),
                           "want_transcript": bool(m["has_audio"] and not has_tr), "header": header,
+                          "label": f"{m['relpath']}" + (f" (part {payload['window'] + 1})" if n > 1 else ""),
                           "media_id": m["id"]})
         else:
             photos = []
@@ -305,9 +367,10 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
         tmp = Path(tmpdir)
         futures = {}
         it = iter(specs)
+        quota_hits = 0
 
         def submit_next():
-            if stop is not None and stop.is_set():
+            if (stop is not None and stop.is_set()) or quota_hits >= 3:
                 return
             spec = next(it, None)
             if spec is None:
@@ -323,11 +386,16 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
             fut = next(as_completed(list(futures)))
             spec = futures.pop(fut)
             cid = spec["custom_id"]
+            label = spec.get("label", cid)
+            err = None
             try:
                 data, status, usage = fut.result()
+                err = usage.get("error")
             except Exception as e:
                 data, status, usage = None, "error", {"in": 0, "out": 0}
-                conn.execute("UPDATE requests SET error=? WHERE custom_id=?", (str(e)[:500], cid))
+                err = str(e)
+                if getattr(e, "code", None) == 429:
+                    quota_hits += 1
             conn.execute("UPDATE requests SET model=?, in_tokens=coalesce(in_tokens,0)+?, "
                          "out_tokens=coalesce(out_tokens,0)+? WHERE custom_id=?",
                          (cfg.gemini_model, usage["in"], usage["out"], cid))
@@ -335,15 +403,22 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
                 try:
                     _store(cfg, conn, spec, data)
                 except Exception as e:
-                    status = "error"
-                    conn.execute("UPDATE requests SET error=? WHERE custom_id=?", (f"store: {e}", cid))
+                    status, err = "error", f"could not save the answer: {e}"
             if status != "done":
-                conn.execute("UPDATE requests SET status=? WHERE custom_id=?", (status, cid))
+                conn.execute("UPDATE requests SET status=?, error=? WHERE custom_id=?", (status, err, cid))
             conn.commit()
             stats[status] += 1
             done += 1
-            if done % 10 == 0 or done == len(specs) or status != "done":
-                log(f"[gemini] {done}/{len(specs)} {cid}: {status} — spent so far ${spent(cfg, conn)['usd']}")
+            if status != "done":
+                log(f"[gemini] {done}/{len(specs)} {label}: {status} — {err}")
+            elif done % 10 == 0 or done == len(specs):
+                log(f"[gemini] {done}/{len(specs)} done — spent so far ${spent(cfg, conn)['usd']}")
+            if quota_hits >= 3:
+                log("[gemini] stopping: Gemini keeps answering 'quota exceeded' (429). Enable billing on the "
+                    "key's Google project (free tier = few requests/day) or wait, then click Retry failed.")
+                for f in futures:
+                    f.cancel()
+                break
             submit_next()
     if stop is not None and stop.is_set():
         log("[gemini] stopped; run again to continue where it left off")
