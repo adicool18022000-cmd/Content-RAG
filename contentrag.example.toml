@@ -67,8 +67,11 @@ media_resolution = "low"
 # Frames per second Gemini looks at (1 is its default).
 fps = 1.0
 thinking_level = "low"
-# Parallel requests.
+# Parallel requests. 4 is safe on a paid key; lower it if you see many 429 errors.
 workers = 4
+# Spending cap for unattended runs: analysis pauses once the estimated spend
+# (all runs together) passes this many US dollars. 0 = no cap.
+budget_usd = 60
 
 [prep]
 # Frames sampled per video: one every `min_interval` seconds, but at most

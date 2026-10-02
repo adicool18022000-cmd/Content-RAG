@@ -14,10 +14,13 @@ import subprocess
 import tempfile
 import threading
 import time
+
+import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config
+from .db import MAX_ATTEMPTS
 from .describe import PHOTO_SCHEMA, VIDEO_SCHEMA, plan_requests, store_result
 from .util import fmt_ts, source_path
 
@@ -74,8 +77,10 @@ def api_key(cfg: Config) -> str:
 
 def client(cfg: Config):
     from google import genai
+    from google.genai import types
 
-    return genai.Client(api_key=api_key(cfg))
+    # 10 min per HTTP call: a stalled connection must not hang an overnight run.
+    return genai.Client(api_key=api_key(cfg), http_options=types.HttpOptions(timeout=600_000))
 
 
 def list_models(cfg: Config) -> list[str]:
@@ -98,9 +103,15 @@ def make_proxy(src: Path, start: float, duration: float, out: Path, has_audio: b
            "-vf", "scale='if(gt(iw,ih),640,-2)':'if(gt(iw,ih),-2,640)',fps=2",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-pix_fmt", "yuv420p"]
     cmd += ["-c:a", "aac", "-b:a", "40k", "-ac", "1"] if has_audio else ["-an"]
-    r = subprocess.run(cmd + ["-movflags", "+faststart", str(out)], capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd + ["-movflags", "+faststart", str(out)], capture_output=True, text=True,
+                           timeout=max(300, duration * 3))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("making the small copy timed out (damaged file?)")
     if r.returncode != 0 or not out.exists():
         raise RuntimeError(f"ffmpeg proxy failed: {r.stderr.strip()[-300:]}")
+    if out.stat().st_size < 2048 and start > 0:
+        raise EmptyExcerpt(f"nothing to analyse after {fmt_ts(start)} (file is shorter than its metadata says)")
     return out
 
 
@@ -120,9 +131,17 @@ def _config(cfg: Config, schema: dict):
 
 
 class GeminiError(RuntimeError):
-    def __init__(self, message: str, code: int | None = None):
+    def __init__(self, message: str, code: int | str | None = None):
         super().__init__(message)
         self.code = code
+
+
+class EmptyExcerpt(RuntimeError):
+    """The part of the file we asked for has no video (metadata claimed a longer duration)."""
+
+
+# Errors that are about the key/model, not the clip: stop the run without using attempts.
+FATAL_CODES = (401, 403, 404)
 
 
 def _explain(e) -> GeminiError:
@@ -135,7 +154,8 @@ def _explain(e) -> GeminiError:
                 " free tier, which allows only a few requests per day: enable billing in AI Studio, or wait.")
     elif code in (500, 503, 504):
         hint = " — Gemini was overloaded or timed out; usually works when retried later."
-    elif code in (401, 403):
+    elif code in (401, 403) or (code == 400 and "api key" in msg.lower()):
+        code = 401
         hint = " — the API key was rejected or lacks access to this model."
     elif code == 404:
         hint = " — model not found; use 'Check key & models' and set [gemini] model in contentrag.toml."
@@ -160,6 +180,12 @@ def _call(gclient, cfg: Config, contents, schema: dict) -> tuple[dict | None, st
                 delay *= 2
                 continue
             raise _explain(e) from e
+        except (httpx.TransportError, ConnectionError, TimeoutError) as e:  # Wi-Fi drop, DNS, timeout
+            if attempt < 4:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise GeminiError(f"network problem talking to Gemini: {e or type(e).__name__}", "network") from e
     um = resp.usage_metadata
     usage = {
         "in": getattr(um, "prompt_token_count", 0) or 0,
@@ -228,7 +254,7 @@ def _video_job(gclient, cfg: Config, spec: dict, tmp: Path) -> tuple[dict | None
             try:
                 data, status, usage = _call(gclient, cfg, [part, header], schema_for(want_tr))
             except GeminiError as e:
-                if e.code in (429, 401, 403, 404):
+                if e.code in (429, "network", *FATAL_CODES):
                     raise
                 # inline video rejected or timed out: try the Files API route once
                 part = file_part()
@@ -309,7 +335,13 @@ def _specs(cfg: Config, conn, reqs) -> list[dict]:
     return specs
 
 
-def _shift(data: dict, offset: float) -> dict:
+def _shift(data: dict, offset: float, length: float) -> dict:
+    """Make excerpt-relative times absolute. If the model already answered in absolute file
+    time (all times beyond the excerpt length but inside the excerpt's real range), keep them."""
+    times = [float(m.get("end", 0)) for m in data.get("moments", []) or []]
+    if offset > 0 and times and min(float(m.get("start", 0)) for m in data["moments"]) >= offset - 1 \
+            and max(times) > length + 5:
+        return data
     for key in ("moments", "transcript"):
         for item in data.get(key, []) or []:
             item["start"] = float(item.get("start", 0)) + offset
@@ -338,10 +370,14 @@ def estimate(cfg: Config, conn) -> dict:
 
 
 def spent(cfg: Config, conn) -> dict:
-    row = conn.execute("SELECT coalesce(sum(in_tokens),0) i, coalesce(sum(out_tokens),0) o FROM requests "
-                       "WHERE model=?", (cfg.gemini_model,)).fetchone()
-    pin, pout = PRICES.get(cfg.gemini_model, PRICES["gemini-3.5-flash"])
-    return {"input_tokens": row["i"], "output_tokens": row["o"], "usd": round((row["i"] * pin + row["o"] * pout) / 1e6, 2)}
+    """Estimated Gemini spend across all runs and models used so far."""
+    i = o = usd = 0.0
+    for row in conn.execute("SELECT model, coalesce(sum(in_tokens),0) i, coalesce(sum(out_tokens),0) o "
+                            "FROM requests WHERE model LIKE 'gemini%' GROUP BY model"):
+        pin, pout = PRICES.get(row["model"], PRICES["gemini-3.5-flash"])
+        i, o = i + row["i"], o + row["o"]
+        usd += (row["i"] * pin + row["o"] * pout) / 1e6
+    return {"input_tokens": int(i), "output_tokens": int(o), "usd": round(usd, 2)}
 
 
 # ------------------------------------------------------------------ run
@@ -352,14 +388,18 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
     plan_requests(cfg, conn)
     statuses = ("error", "refused") if retry else ("pending",)
     reqs = conn.execute(
-        f"SELECT * FROM requests WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY custom_id",
-        statuses).fetchall()
+        f"SELECT * FROM requests WHERE status IN ({','.join('?' * len(statuses))}) "
+        "AND coalesce(attempts,0) < ? ORDER BY custom_id",
+        (*statuses, MAX_ATTEMPTS)).fetchall()
     if limit:
         reqs = reqs[:limit]
     specs = _specs(cfg, conn, reqs)
-    stats = {"done": 0, "refused": 0, "error": 0, "skipped_unmounted": len(reqs) - len(specs)}
+    stats = {"done": 0, "refused": 0, "error": 0, "skipped_unmounted": len(reqs) - len(specs), "quota": False}
     if not specs:
         return stats
+    if cfg.gemini_budget_usd and spent(cfg, conn)["usd"] >= cfg.gemini_budget_usd:
+        log(f"[gemini] spending cap of ${cfg.gemini_budget_usd:g} already reached; nothing sent")
+        return {**stats, "budget": True}
     gclient = client(cfg)
     log(f"[gemini] {len(specs)} requests with {cfg.gemini_model}, {cfg.gemini_workers} at a time")
     with tempfile.TemporaryDirectory(prefix="crag-") as tmpdir, \
@@ -368,9 +408,13 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
         futures = {}
         it = iter(specs)
         quota_hits = 0
+        network_hits = 0
+        fatal = None
+
+        over_budget = False
 
         def submit_next():
-            if (stop is not None and stop.is_set()) or quota_hits >= 3:
+            if (stop is not None and stop.is_set()) or quota_hits >= 3 or network_hits >= 3 or over_budget or fatal:
                 return
             spec = next(it, None)
             if spec is None:
@@ -391,11 +435,29 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
             try:
                 data, status, usage = fut.result()
                 err = usage.get("error")
+            except EmptyExcerpt as e:
+                data, status, usage = {"title": "", "summary": "", "tags": [], "moments": []}, "done", \
+                    {"in": 0, "out": 0}
+                log(f"[gemini] {label}: {e}")
             except Exception as e:
                 data, status, usage = None, "error", {"in": 0, "out": 0}
                 err = str(e)
-                if getattr(e, "code", None) == 429:
+                code = getattr(e, "code", None)
+                if isinstance(e, (httpx.TransportError, ConnectionError, TimeoutError)):
+                    code = "network"  # e.g. the file upload hit a Wi-Fi drop
+                # Not the file's fault -> status "pending", no attempt used, picked up again later.
+                if code == 429:
                     quota_hits += 1
+                    status = "pending"
+                elif code == "network":
+                    network_hits += 1
+                    status = "pending"
+                elif code in FATAL_CODES:
+                    fatal = err
+                    status = "pending"
+                elif spec["kind"] == "video" and not spec["src"].exists():
+                    status = "pending"  # drive unplugged mid-run
+                    err = "drive was unplugged"
             conn.execute("UPDATE requests SET model=?, in_tokens=coalesce(in_tokens,0)+?, "
                          "out_tokens=coalesce(out_tokens,0)+? WHERE custom_id=?",
                          (cfg.gemini_model, usage["in"], usage["out"], cid))
@@ -405,15 +467,36 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
                 except Exception as e:
                     status, err = "error", f"could not save the answer: {e}"
             if status != "done":
-                conn.execute("UPDATE requests SET status=?, error=? WHERE custom_id=?", (status, err, cid))
+                conn.execute("UPDATE requests SET status=?, error=?, attempts=coalesce(attempts,0)+? "
+                             "WHERE custom_id=?", (status, err, int(status != "pending"), cid))
             conn.commit()
-            stats[status] += 1
+            stats[status] = stats.get(status, 0) + 1
             done += 1
             if status != "done":
                 log(f"[gemini] {done}/{len(specs)} {label}: {status} — {err}")
-            elif done % 10 == 0 or done == len(specs):
-                log(f"[gemini] {done}/{len(specs)} done — spent so far ${spent(cfg, conn)['usd']}")
+            else:
+                quota_hits = network_hits = 0  # only consecutive problems count
+                if done % 10 == 0 or done == len(specs):
+                    log(f"[gemini] {done}/{len(specs)} done — spent so far ${spent(cfg, conn)['usd']}")
+            if cfg.gemini_budget_usd and not over_budget and spent(cfg, conn)["usd"] >= cfg.gemini_budget_usd:
+                over_budget = True
+                stats["budget"] = True
+                log(f"[gemini] spending cap of ${cfg.gemini_budget_usd:g} reached; pausing analysis. Raise "
+                    "[gemini] budget_usd in contentrag.toml to continue.")
+            if fatal:
+                stats["fatal"] = fatal
+                log(f"[gemini] stopping: {fatal}")
+                for f in futures:
+                    f.cancel()
+                break
+            if network_hits >= 3:
+                stats["network"] = True
+                log("[gemini] stopping: no internet connection to Gemini. Will continue when it's back.")
+                for f in futures:
+                    f.cancel()
+                break
             if quota_hits >= 3:
+                stats["quota"] = True
                 log("[gemini] stopping: Gemini keeps answering 'quota exceeded' (429). Enable billing on the "
                     "key's Google project (free tier = few requests/day) or wait, then click Retry failed.")
                 for f in futures:
@@ -428,7 +511,7 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
 def _store(cfg: Config, conn, spec: dict, data: dict) -> None:
     req = spec["req"]
     if spec["kind"] == "video":
-        data = _shift(data, spec["offset"])
+        data = _shift(data, spec["offset"], spec["end"] - spec["start"])
         segs = [s for s in data.get("transcript", []) or [] if (s.get("text") or "").strip()]
         if segs:
             conn.execute("DELETE FROM transcript WHERE media_id=? AND start>=? AND start<?",

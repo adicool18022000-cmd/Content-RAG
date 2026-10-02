@@ -141,6 +141,7 @@ def ffprobe(path: Path) -> dict:
         capture_output=True,
         text=True,
         check=True,
+        timeout=120,  # a damaged file can make ffprobe hang
     )
     return json.loads(out.stdout)
 

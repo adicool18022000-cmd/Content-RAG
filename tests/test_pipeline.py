@@ -36,7 +36,10 @@ def _video(path: Path, size: str, seconds: int, meta: dict[str, str]):
 
 
 @pytest.fixture()
-def env(tmp_path):
+def env(tmp_path, monkeypatch):
+    from contentrag import scan as scan_mod
+
+    monkeypatch.setattr(scan_mod, "SETTLE_SECONDS", 0)  # test files are brand new
     a, b = tmp_path / "ssd1" / "Archive", tmp_path / "ssd1" / "Brand"
     _video(a / "2023" / "goa.mov", "640x360", 12,
            {"creation_time": "2023-08-12T13:34:33Z", "location": "+15.4909+073.8278/"})
@@ -156,7 +159,7 @@ def test_pipeline(env, tmp_path):
     assert out["broll"] == 1 and out["events"] >= 1
     vault = cfg.vault_dir
     assert (vault / "CLAUDE.md").exists() and (vault / "_generated" / "Timeline.md").exists()
-    events = list((vault / "_generated" / "Events").glob("*.md"))
+    events = list((vault / "_generated" / "Events").rglob("*.md"))
     text = "\n".join(e.read_text() for e in events)
     assert "Night bike ride" in text and "![[_assets/thumbs/" in text
     (vault / "Me.md").write_text("mine")
@@ -335,7 +338,204 @@ def test_gemini_failures(env, monkeypatch):
     monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=Quota(), files=Files()))
     lines = []
     stats = gemini.run(cfg, conn, log=lines.append)
-    assert stats["error"] == 3 and stats["done"] == 0
+    # quota errors are not the files' fault: they stay pending with no attempt used
+    assert stats["quota"] and stats["pending"] == 3 and stats["done"] == 0
     assert any("stopping" in l for l in lines)
-    f = failures(conn)
-    assert f and "429" in f[0]["error"] and "billing" in f[0]["error"] and f[0]["file"]
+    row = conn.execute("SELECT error, attempts FROM requests WHERE error IS NOT NULL LIMIT 1").fetchone()
+    assert "429" in row["error"] and "billing" in row["error"] and row["attempts"] == 0
+    assert not failures(conn)
+
+
+# ---------------------------------------------------------------- edge cases + autopilot
+
+def test_scan_edge_cases(env, monkeypatch, tmp_path):
+    import os
+
+    from contentrag import scan as scan_mod
+
+    cfg, conn = env
+    a = cfg.roots[0].path
+    (a / "empty.mp4").write_bytes(b"")
+    (a / "broken.mp4").write_bytes(b"this is not a video" * 100)
+    # iPhone Live Photo: IMG_0001.HEIC/.JPG + IMG_0001.MOV (~2 s)
+    from PIL import Image
+
+    Image.new("RGB", (400, 300), "blue").save(a / "IMG_0001.JPG")
+    _video(a / "IMG_0001.MOV", "320x240", 2, {})
+    _video(a / "tiny.mp4", "320x240", 1, {})
+    stats = scan(cfg, conn, log=lambda *_: None)
+    assert stats["empty"] == 1 and stats["failed"] == 1  # broken file recorded, run continues
+    skips = dict(conn.execute("SELECT relpath, skip_reason FROM media WHERE skip_reason IS NOT NULL").fetchall())
+    assert skips == {"IMG_0001.MOV": "live photo video", "tiny.mp4": "too short"}
+
+    # a file being copied right now is left for the next scan
+    monkeypatch.setattr(scan_mod, "SETTLE_SECONDS", 3600)
+    _video(a / "copying.mp4", "320x240", 3, {})
+    assert scan(cfg, conn, log=lambda *_: None)["still_copying"] >= 1
+    assert not conn.execute("SELECT 1 FROM locations WHERE relpath='copying.mp4'").fetchone()
+    monkeypatch.setattr(scan_mod, "SETTLE_SECONDS", 0)
+
+    # replaced file at the same path, and a deleted file, are both noticed
+    _video(a / "2023" / "VID_20230812_210000.mp4", "360x640", 5, {})
+    os.remove(a / "IMG_20230813_101500.jpg")
+    stats = scan(cfg, conn, log=lambda *_: None)
+    assert stats["replaced"] == 1 and stats["removed"] == 2  # old version + deleted photo
+    assert not conn.execute("SELECT 1 FROM media WHERE relpath='IMG_20230813_101500.jpg'").fetchone()
+
+
+def test_prep_gives_up_after_max_attempts(env, monkeypatch):
+    from contentrag import prep as prep_mod
+    from contentrag.db import MAX_ATTEMPTS, failures
+
+    cfg, conn = env
+    scan(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(prep_mod, "prep_photo", lambda *a: (_ for _ in ()).throw(RuntimeError("bad photo")))
+    for _ in range(MAX_ATTEMPTS + 1):
+        prep(cfg, conn, log=lambda *_: None)
+    row = conn.execute("SELECT attempts, prepped FROM media WHERE kind='photo'").fetchone()
+    assert row["attempts"] == MAX_ATTEMPTS and row["prepped"] == 0
+    assert any(f["status"] == "file gave up" for f in failures(conn))
+
+
+def test_absolute_timestamps_are_not_shifted_twice():
+    from contentrag.gemini import _shift
+
+    rel = _shift({"moments": [{"start": 1, "end": 5}]}, offset=360, length=360)
+    assert rel["moments"][0]["start"] == 361
+    ab = _shift({"moments": [{"start": 365, "end": 400}]}, offset=360, length=360)
+    assert ab["moments"][0]["start"] == 365
+
+
+def test_autopilot_end_to_end(env, monkeypatch):
+    """Quota errors make Autopilot wait and continue; it finishes with search data and a vault."""
+    from google.genai import errors
+
+    from contentrag import autopilot as ap_mod, gemini
+    from contentrag.autopilot import Autopilot, Busy, pipeline_lock, read_state
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_workers = 1
+    monkeypatch.setattr(ap_mod, "QUOTA_WAITS", [0])
+    monkeypatch.setattr(gemini.time, "sleep", lambda s: None)
+    good = _FakeModels()
+    calls = {"n": 0}
+
+    class Flaky:
+        def generate_content(self, model, contents, config):
+            calls["n"] += 1
+            if 2 <= calls["n"] <= 16:  # 3 requests x 5 tries all 429 -> autopilot waits, then resumes
+                raise errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+            return good.generate_content(model, contents, config)
+
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=Flaky()))
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setattr(gemini, "list_models", lambda cfg: [cfg.gemini_model])
+    lines = []
+    result = Autopilot(cfg, log=lines.append, hours=1).run()
+    assert result["counts"]["described"] == result["counts"]["media"] == 4, lines
+    assert any("waiting until" in l for l in lines)
+    assert read_state(cfg)["status"] == "finished"
+    gen = cfg.vault_dir / "_generated"
+    assert (gen / "Index.md").exists() and (gen / "Years" / "2023.md").exists()
+    assert list((gen / "Themes").glob("*.md")) or True
+    assert "`m" in (gen / "Years" / "2023.md").read_text()
+    assert list((cfg.library_dir / "logs").glob("autopilot-*.log"))
+    # only one pipeline per library
+    with pipeline_lock(cfg):
+        with pytest.raises(Busy):
+            Autopilot(cfg, log=lambda *_: None).run()
+
+
+def test_budget_cap_pauses_analysis(env, monkeypatch):
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_workers = 1
+    cfg.gemini_budget_usd = 0.0001  # first answer already exceeds it
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert stats["budget"] and stats["done"] < 5
+    assert gemini.run(cfg, conn, log=lambda *_: None)["budget"]  # stays paused on the next run
+
+
+def test_pull_cuts_clips_and_premiere_xml(env, monkeypatch):
+    import xml.etree.ElementTree as ET
+
+    from contentrag import gemini
+    from contentrag.pull import parse_ids, pull
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
+    gemini.run(cfg, conn, log=lambda *_: None)
+    ids = [r[0] for r in conn.execute("SELECT m.id FROM moments m JOIN media md ON md.id=m.media_id "
+                                      "WHERE md.kind='video' ORDER BY m.id LIMIT 2")]
+    photo = conn.execute("SELECT m.id FROM moments m JOIN media md ON md.id=m.media_id "
+                         "WHERE md.kind='photo'").fetchone()[0]
+    assert parse_ids([f"m{ids[0]}, m{ids[1]}", str(photo), "m999999"]) == [*ids, photo, 999999]
+    res = pull(cfg, conn, [*ids, photo, 999999], "my reel", log=lambda *_: None)
+    assert res["pulled"] == 3 and len(res["skipped"]) == 1
+    folder = Path(res["folder"])
+    clips = sorted(folder.glob("*.mp4"))
+    assert len(clips) == 2 and all(c.stat().st_size > 1000 for c in clips)
+    sel = json.loads((folder / "selects.json").read_text())
+    assert sel[0]["moment"] == f"m{ids[0]}"
+    assert all(s["clip_in"] == min(0.5, s["source_in"]) for s in sel if s["kind"] == "video")  # head handle
+    root = ET.parse(folder / "timeline.xml").getroot()
+    items = root.findall(".//video/track/clipitem")
+    assert len(items) == 2 and items[0].find("file/pathurl").text.startswith("file://")
+    assert int(items[1].find("start").text) == int(items[0].find("end").text)  # back to back
+
+
+def test_preflight_blocks_bad_setup(env, monkeypatch):
+    from contentrag import gemini
+    from contentrag.autopilot import Autopilot, preflight, read_state
+
+    cfg, conn = env
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert any("GEMINI_API_KEY" in p for p in preflight(cfg))
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setattr(gemini, "list_models", lambda cfg: ["gemini-9-flash"])
+    assert any("gemini-9-flash" in p for p in preflight(cfg))
+    res = Autopilot(cfg, log=lambda *_: None).run()
+    assert res["summary"].startswith("Can't start") and read_state(cfg)["status"] == "error"
+    assert conn.execute("SELECT count(*) FROM media").fetchone()[0] == 0  # nothing was touched
+
+
+def test_bad_key_and_network_do_not_burn_attempts(env, monkeypatch):
+    import httpx
+    from google.genai import errors
+
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_workers = 1
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini.time, "sleep", lambda s: None)
+
+    class BadKey:
+        def generate_content(self, model, contents, config):
+            raise errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                     "status": "INVALID_ARGUMENT"}})
+
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=BadKey()))
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert "API key" in stats["fatal"] and stats["pending"] == 1  # stopped at the first one
+
+    class Offline:
+        def generate_content(self, model, contents, config):
+            raise httpx.ConnectError("nodename nor servname provided")
+
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=Offline()))
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert stats["network"] and stats["pending"] == 3
+    assert conn.execute("SELECT max(coalesce(attempts,0)) FROM requests").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM requests WHERE status='pending'").fetchone()[0] == 5

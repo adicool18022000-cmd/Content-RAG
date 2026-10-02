@@ -110,11 +110,23 @@ def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.executescript(SCHEMA)
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
-    for col in ("in_tokens", "out_tokens"):  # added after the first release
-        if col not in cols:
-            conn.execute(f"ALTER TABLE requests ADD COLUMN {col} INTEGER")
+    _add_columns(conn, "requests", {"in_tokens": "INTEGER", "out_tokens": "INTEGER",
+                                    "attempts": "INTEGER DEFAULT 0"})
+    _add_columns(conn, "media", {"attempts": "INTEGER DEFAULT 0", "skip_reason": "TEXT"})
+    conn.commit()
     return conn
+
+
+# Errors are retried this many times (across runs) before an item is given up on.
+MAX_ATTEMPTS = 3
+
+
+def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
+    """Columns added after the first release; existing databases get them on open."""
+    have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    for col, decl in columns.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
 def jloads(value: str | None, default=None):
@@ -164,18 +176,20 @@ def failures(conn, limit: int = 50) -> list[dict]:
     """Failed / blocked AI requests with the file they belong to and the reason."""
     out = []
     for r in conn.execute(
-        "SELECT custom_id, kind, payload, status, error FROM requests WHERE status IN ('error','refused') "
+        "SELECT custom_id, kind, payload, status, error, attempts FROM requests WHERE status IN ('error','refused') "
         "ORDER BY custom_id LIMIT ?", (limit,)):
         payload = jloads(r["payload"], {})
         mid = payload.get("media_id") or (payload.get("media_ids") or [None])[0]
         m = conn.execute("SELECT relpath, duration, size FROM media WHERE id=?", (mid,)).fetchone() if mid else None
         out.append({
-            "request": r["custom_id"], "status": r["status"], "error": r["error"] or "(no message recorded)",
+            "request": r["custom_id"], "error": r["error"] or "(no message recorded)",
+            "status": "gave up" if r["status"] == "error" and (r["attempts"] or 0) >= MAX_ATTEMPTS else r["status"],
             "file": m["relpath"] if m else None,
             "duration_s": round(m["duration"] or 0) if m else None,
             "size_mb": round((m["size"] or 0) / 1e6) if m else None,
         })
-    for m in conn.execute("SELECT relpath, error FROM media WHERE error IS NOT NULL LIMIT ?", (limit,)):
-        out.append({"request": None, "status": "file", "error": m["error"], "file": m["relpath"],
+    for m in conn.execute("SELECT relpath, error, attempts FROM media WHERE error IS NOT NULL LIMIT ?", (limit,)):
+        out.append({"request": None, "status": "file gave up" if (m["attempts"] or 0) >= MAX_ATTEMPTS else "file",
+                    "error": m["error"], "file": m["relpath"],
                     "duration_s": None, "size_mb": None})
     return out

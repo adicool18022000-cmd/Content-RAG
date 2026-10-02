@@ -64,6 +64,20 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
 <main>
   <div style="display:grid;gap:16px;align-content:start">
     <section>
+      <h2>Autopilot</h2>
+      <div id="ap" class="note" style="margin-top:0">Runs everything by itself: finds files, prepares them, analyses with AI,
+        waits out quota limits, retries failures, builds search and the Obsidian vault. Keep the Mac plugged in, lid open.</div>
+      <div id="apstate" style="margin:8px 0"></div>
+      <div id="apbar" style="display:none;height:8px;background:var(--chip);border-radius:4px;overflow:hidden;margin-bottom:6px">
+        <div id="apfill" style="height:100%;width:0;background:var(--accent)"></div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="primary" id="apstart">Start Autopilot</button>
+        <select id="aphours" title="Give up waiting after"><option value="12">up to 12 h</option><option value="24" selected>up to 24 h</option><option value="48">up to 48 h</option></select>
+        <button id="apstop">Stop</button>
+      </div>
+    </section>
+
+    <section>
       <h2>Setup</h2>
       <div id="setup"></div>
       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
@@ -116,6 +130,11 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
         from <input id="from" placeholder="2021" size="7"> to <input id="to" placeholder="2023-06" size="7">
         <label><input type="checkbox" id="noshaky"> no shaky/blurry</label>
       </div>
+      <div id="selbar" style="display:none;margin-top:10px;gap:8px;align-items:center">
+        <b id="selcount"></b> <button class="primary" id="export">Export selected clips</button>
+        <button id="clearsel">Clear</button>
+        <span class="note">Cuts them from the originals + a Premiere timeline, into library/exports/</span>
+      </div>
       <div id="results" class="grid"></div>
     </section>
 
@@ -158,6 +177,13 @@ document.addEventListener("click", async (e) => {
   refresh();
 });
 $("stop").onclick = () => post("/api/stop");
+$("apstop").onclick = () => post("/api/stop");
+$("apstart").onclick = async () => {
+  const r = await post("/api/run", {step: "autopilot", hours: $("aphours").value});
+  const j = await r.json();
+  if (!j.ok) alert(j.message || j.error);
+  refresh();
+};
 
 let running = false;
 async function refresh() {
@@ -185,6 +211,19 @@ async function refresh() {
   if (s.spent) $("cost").innerHTML = `<div class="row"><span>Spent so far</span><b>$${s.spent.usd.toFixed(2)}</b></div>
      <div class="row"><span>Tokens in / out</span><b>${(s.spent.input_tokens/1e6).toFixed(2)}M / ${(s.spent.output_tokens/1e6).toFixed(2)}M</b></div>`;
   document.querySelectorAll("button[data-step]").forEach(b => b.disabled = running);
+  const ap = s.autopilot || {}, pr = ap.progress;
+  const label = {running: "🟢 Running", waiting: "⏸ Waiting", finished: "✅ Finished", stopped: "⏹ Stopped", "needs attention": "⚠️ Needs attention",
+                 error: "❌ Error", interrupted: "⚠️ Interrupted — click Start to resume"}[ap.status] || "Not started yet";
+  $("apstate").innerHTML = `<b>${label}</b>` +
+    (ap.phase && ["running", "waiting"].includes(ap.status) ? ` · step: <b>${esc(ap.phase)}</b>${ap.round > 1 ? ` (round ${ap.round})` : ""}` : "") +
+    (ap.waiting_until ? `<div class="note">until ${esc(ap.waiting_until.slice(11, 16))}: ${esc(ap.message || "")}</div>` :
+     (ap.message ? `<div class="note">${esc(ap.message)}</div>` : "")) +
+    (pr ? `<div class="note">${pr.done} / ${pr.total}${pr.eta ? ` · done around ${pr.eta}` : ""}</div>` : "");
+  $("apbar").style.display = pr ? "" : "none";
+  if (pr) $("apfill").style.width = `${Math.round(100 * pr.done / Math.max(1, pr.total))}%`;
+  $("apstart").disabled = running;
+  $("apstart").textContent = ap.status === "interrupted" ? "Resume Autopilot" : "Start Autopilot";
+  $("apstop").disabled = !(running || ["running", "waiting"].includes(ap.status));
   $("stop").disabled = !running;
 }
 
@@ -231,12 +270,33 @@ $("sf").onsubmit = async (e) => {
   $("results").innerHTML = j.results.map((r, i) => `
     <div class="card" data-i="${i}">
       ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy" alt="">` : ""}
-      <div class="b"><b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span><span class="chip">${esc(r.orientation || "")}</span>
+      <div class="b"><label onclick="event.stopPropagation()" style="float:right"><input type="checkbox" class="sel" data-id="${r.moment_id}" ${selected.has(r.moment_id) ? "checked" : ""}> pick</label>
+      <span class="chip">m${r.moment_id}</span> <b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span><span class="chip">${esc(r.orientation || "")}</span>
       <div>${esc(r.description)}</div><div class="t">${esc((r.taken_at || "").slice(0, 10))} ${esc(r.place || "")}</div></div>
     </div>`).join("");
 };
 
+const selected = new Set();
+function updateSel() {
+  $("selbar").style.display = selected.size ? "flex" : "none";
+  $("selcount").textContent = `${selected.size} selected`;
+}
+$("results").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("sel")) return;
+  const id = +e.target.dataset.id;
+  e.target.checked ? selected.add(id) : selected.delete(id);
+  updateSel();
+});
+$("clearsel").onclick = () => { selected.clear(); document.querySelectorAll(".sel").forEach(c => c.checked = false); updateSel(); };
+$("export").onclick = async () => {
+  const name = prompt("Name for this export folder:", "my-reel");
+  if (!name) return;
+  const r = await post("/api/run", {step: "pull", ids: [...selected].map(i => "m" + i), name});
+  const j = await r.json();
+  if (!j.ok) alert(j.message || j.error); else alert("Exporting — watch the Activity box. Files go to library/exports/" + name);
+};
 $("results").addEventListener("click", (e) => {
+  if (e.target.closest("label")) return;
   const card = e.target.closest(".card");
   if (!card) return;
   const r = window._results[+card.dataset.i];

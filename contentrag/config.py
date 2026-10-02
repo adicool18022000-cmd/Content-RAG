@@ -36,6 +36,7 @@ class Config:
     gemini_thinking: str = "low"  # minimal | low | medium | high
     gemini_fps: float = 1.0
     gemini_workers: int = 4
+    gemini_budget_usd: float = 0.0  # 0 = no cap
     model: str = "claude-opus-5-5"
     effort: str = "low"
     retry_model: str = "claude-sonnet-5-5"
@@ -120,6 +121,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         gemini_thinking=g.get("thinking_level", Config.gemini_thinking),
         gemini_fps=float(g.get("fps", Config.gemini_fps)),
         gemini_workers=int(g.get("workers", Config.gemini_workers)),
+        gemini_budget_usd=float(g.get("budget_usd", Config.gemini_budget_usd)),
         model=d.get("model", Config.model),
         effort=d.get("effort", Config.effort),
         retry_model=d.get("retry_model", Config.retry_model),

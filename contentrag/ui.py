@@ -25,7 +25,7 @@ from .db import connect, failures
 from .util import source_path
 
 HTML = Path(__file__).with_name("ui.html")
-STEPS = ("scan", "prep", "transcribe", "describe", "retry", "embed", "vault", "all")
+STEPS = ("scan", "prep", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
 
 
 class Job:
@@ -38,6 +38,8 @@ class Job:
         self.name: str | None = None
         self.running = False
         self.stop = threading.Event()
+        self.hours = 24.0
+        self.params: dict = {}
 
     def log(self, *parts) -> None:
         line = f"{datetime.now():%H:%M:%S} " + " ".join(str(p) for p in parts)
@@ -56,23 +58,33 @@ class Job:
         return True, "started"
 
     def _run(self, step: str) -> None:
-        conn = connect(self.cfg.db_path)
+        from .autopilot import Autopilot, Busy, pipeline_lock
+
         try:
-            steps = ["scan", "prep", "transcribe", "describe", "embed", "vault"] if step == "all" else [step]
-            for s in steps:
-                if self.stop.is_set():
-                    self.log("[ui] stopped")
-                    break
-                self.log(f"[ui] ── {s} ──")
-                result = self._step(s, conn)
-                self.log(f"[ui] {s} finished: {json.dumps(result, ensure_ascii=False)}")
+            if step == "autopilot":
+                Autopilot(self.cfg, log=self.log, stop=self.stop, hours=self.hours).run()
+                return
+            with pipeline_lock(self.cfg):
+                conn = connect(self.cfg.db_path)
+                try:
+                    steps = ["scan", "prep", "transcribe", "describe", "embed", "vault"] if step == "all" else [step]
+                    for s in steps:
+                        if self.stop.is_set():
+                            self.log("[ui] stopped")
+                            break
+                        self.log(f"[ui] ── {s} ──")
+                        result = self._step(s, conn)
+                        self.log(f"[ui] {s} finished: {json.dumps(result, ensure_ascii=False, default=str)}")
+                finally:
+                    conn.close()
+        except Busy as e:
+            self.log(f"[ui] {e}")
         except SystemExit as e:  # friendly errors from the pipeline (missing packages etc.)
             self.log(f"[ui] {e}")
         except Exception as e:
             self.log(f"[ui] ERROR: {e}")
             self.log(traceback.format_exc(limit=3))
         finally:
-            conn.close()
             with self.lock:
                 self.running = False
 
@@ -85,7 +97,7 @@ class Job:
         if s == "prep":
             from .prep import prep
 
-            return prep(cfg, conn, log=log)
+            return prep(cfg, conn, log=log, stop=self.stop)
         if s == "transcribe":
             if not cfg.transcribe_enabled:
                 return "skipped (transcribe.enabled = false)"
@@ -115,6 +127,10 @@ class Job:
             from .vault import build_vault
 
             return build_vault(cfg, conn, log=log)
+        if s == "pull":
+            from .pull import pull
+
+            return pull(cfg, conn, self.params["ids"], self.params["name"], log=log)
         raise ValueError(s)
 
 
@@ -145,6 +161,14 @@ def status(cfg: Config, job: Job) -> dict:
             "job": {"name": job.name, "running": job.running},
             "failures": failures(conn, 30),
         }
+        from .autopilot import eta, lock_held, read_state
+
+        ap = read_state(cfg)
+        if ap.get("status") in ("running", "waiting") and not job.running and not lock_held(cfg):
+            ap["status"] = "interrupted"  # the process died (crash, closed terminal, power cut)
+        out["autopilot"] = {**{k: ap.get(k) for k in ("status", "phase", "round", "started_at", "updated_at",
+                                                       "waiting_until", "message", "deadline")},
+                            "progress": eta(cfg, conn, ap)}
         out["key_present"] = bool(os.environ.get(out["key_env"]))
         if cfg.backend == "gemini":
             from . import gemini
@@ -283,10 +307,26 @@ def make_handler(cfg: Config, job: Job):
                 step = body.get("step")
                 if step not in STEPS:
                     return self._json({"error": f"unknown step {step}"}, 400)
+                if step == "autopilot":
+                    job.hours = float(body.get("hours") or 24)
+                if step == "pull":
+                    from .pull import parse_ids
+
+                    try:
+                        ids = parse_ids([str(x) for x in body.get("ids") or []])
+                    except ValueError:
+                        return self._json({"error": "bad moment ids"}, 400)
+                    if not ids:
+                        return self._json({"error": "no moments selected"}, 400)
+                    job.params = {"ids": ids, "name": str(body.get("name") or "selects")[:60]}
                 ok, msg = job.start(step)
                 return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
             if url.path == "/api/stop":
+                from .autopilot import read_state, stop_file
+
                 job.stop.set()
+                if read_state(cfg).get("status") in ("running", "waiting"):
+                    stop_file(cfg).touch()  # also stops an Autopilot started from the terminal
                 job.log("[ui] stop requested — the current request batch finishes first")
                 return self._json({"ok": True})
             return self._json({"error": "not found"}, 404)

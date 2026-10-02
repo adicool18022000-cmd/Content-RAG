@@ -84,34 +84,53 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
     gen = vault / "_generated"
     if gen.exists():
         shutil.rmtree(gen)
-    (gen / "Events").mkdir(parents=True)
-    (gen / "Broll").mkdir(parents=True)
+    for sub in ("Events", "Broll", "Years", "Places", "Themes"):
+        (gen / sub).mkdir(parents=True)
     _scaffold(vault)
 
     media = conn.execute(
-        "SELECT * FROM media WHERE described=1 AND taken_at IS NOT NULL ORDER BY taken_at").fetchall()
+        "SELECT * FROM media WHERE described=1 AND skip_reason IS NULL AND taken_at IS NOT NULL "
+        "ORDER BY taken_at").fetchall()
     moments_by_media: dict[str, list] = {}
     for mo in conn.execute("SELECT * FROM moments ORDER BY media_id, start"):
         moments_by_media.setdefault(mo["media_id"], []).append(mo)
+    media_by_id = {m["id"]: m for m in media}
 
     archive = [m for m in media if m["root_kind"] == "archive"]
     events = cluster_events(archive)
-    timeline: dict[str, list[str]] = {}
+    used: set[str] = set()
+    event_of: dict[str, str] = {}  # media id -> event note name
+    summaries = []
     for ev in events:
-        name = _write_event(cfg, conn, vault, gen / "Events", ev, moments_by_media)
-        timeline.setdefault(ev[0]["taken_at"][:7], []).append(name)
+        info = _write_event(cfg, conn, vault, gen / "Events", ev, moments_by_media, used)
+        summaries.append(info)
+        for m in ev:
+            event_of[m["id"]] = info["name"]
 
     broll = [m for m in media if m["root_kind"] == "brand"]
     for m in broll:
-        _write_broll(cfg, conn, vault, gen / "Broll", m, moments_by_media.get(m["id"], []))
+        event_of[m["id"]] = _write_broll(cfg, conn, vault, gen / "Broll", m, moments_by_media.get(m["id"], []))
 
-    _write_timeline(gen, timeline)
+    years = _write_years(gen, summaries)
+    places = _write_places(gen, summaries)
+    themes = _write_themes(gen, media_by_id, moments_by_media, event_of)
+    _write_timeline(gen, summaries)
+    _write_index(gen, media, summaries, years, places, themes, len(broll))
     _write_base(vault)
-    log(f"[vault] {len(events)} events, {len(broll)} B-roll notes -> {vault}")
-    return {"events": len(events), "broll": len(broll), "vault": str(vault)}
+    log(f"[vault] {len(events)} events, {len(broll)} B-roll notes, {len(themes)} themes -> {vault}")
+    return {"events": len(events), "broll": len(broll), "themes": len(themes), "vault": str(vault)}
 
 
-def _write_event(cfg, conn, vault, folder, ev, moments_by_media) -> str:
+def _moment_line(mo, m, link: str | None = None) -> str:
+    """One searchable, pullable line per moment: id, in/out, orientation, score, what happens."""
+    where = f" · [[{link}]]" if link else ""
+    speech = f" — “{mo['speech_en']}”" if mo["speech_en"] else ""
+    span = f"{fmt_ts(mo['start'])}–{fmt_ts(mo['end'])}" if m["kind"] == "video" else "photo"
+    return (f"- `m{mo['id']}` {span} · {m['orientation'] or '?'} · B{mo['broll_score']} · "
+            f"{mo['description']}{speech}{where}")
+
+
+def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str]) -> dict:
     first, last = ev[0], ev[-1]
     places = Counter(m["place"] for m in ev if m["place"])
     place = places.most_common(1)[0][0] if places else ""
@@ -119,6 +138,12 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media) -> str:
     titles = [m["title"] for m in ev if m["title"]]
     headline = titles[0] if titles else "Untitled"
     name = _slug(f"{first['taken_at'][:10]} {_city(place) or ''} - {headline}", 90)
+    base, k = name, 2
+    while name in used:  # same day, place and title: keep both notes
+        name, k = f"{base} ({k})", k + 1
+    used.add(name)
+    folder = folder / first["taken_at"][:4]
+    folder.mkdir(exist_ok=True)
     video_min = sum((m["duration"] or 0) for m in ev if m["kind"] == "video") / 60
     best = max(ev, key=lambda m: max((mo["broll_score"] or 0 for mo in moments_by_media.get(m["id"], [])), default=0))
     cover = _thumb(cfg, conn, vault, best["id"])
@@ -155,15 +180,17 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media) -> str:
             lines.append(m["summary"].strip())
         if m["kind"] == "video":
             for mo in moments_by_media.get(m["id"], []):
-                speech = f" — “{mo['speech_en']}”" if mo["speech_en"] else ""
-                lines.append(f"- `{fmt_ts(mo['start'])}–{fmt_ts(mo['end'])}` {mo['description']}"
-                             f" *(B-roll {mo['broll_score']}/5)*{speech}")
+                lines.append(_moment_line(mo, m))
         lines += [f"`{m['root']}:{m['relpath']}` · id `{m['id']}`", ""]
     (folder / f"{name}.md").write_text("\n".join(lines), encoding="utf-8")
-    return name
+    best_moments = sorted((mo for m in ev for mo in moments_by_media.get(m["id"], [])),
+                          key=lambda mo: -(mo["broll_score"] or 0))[:3]
+    return {"name": name, "date": first["taken_at"][:10], "place": place, "city": _city(place),
+            "headline": headline, "items": len(ev), "video_min": video_min,
+            "tags": [t for t, _ in tags.most_common(6)], "best": [mo["id"] for mo in best_moments]}
 
 
-def _write_broll(cfg, conn, vault, folder, m, moments) -> None:
+def _write_broll(cfg, conn, vault, folder, m, moments) -> str:
     thumb = _thumb(cfg, conn, vault, m["id"])
     best = max((mo["broll_score"] or 0 for mo in moments), default=0)
     uses = Counter(u for mo in moments for u in jloads(mo["content_uses"]))
@@ -189,22 +216,114 @@ def _write_broll(cfg, conn, vault, folder, m, moments) -> None:
         lines += ["", m["summary"].strip()]
     lines.append("")
     for mo in moments:
-        lines.append(f"- `{fmt_ts(mo['start'])}–{fmt_ts(mo['end'])}` {mo['description']} "
-                     f"*({mo['shot_type']}, {mo['camera_motion']}, B-roll {mo['broll_score']}/5)*")
+        lines.append(_moment_line(mo, m) + f" *({mo['shot_type']}, {mo['camera_motion']})*")
+    lines += ["", f"`{m['root']}:{m['relpath']}` · id `{m['id']}`"]
     (folder / f"{name}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return name
 
 
-def _write_timeline(gen: Path, timeline: dict[str, list[str]]) -> None:
-    lines = ["# Timeline", "", "*Every event in the archive, by month. Generated.*", ""]
-    year = None
-    for month in sorted(timeline):
-        if month[:4] != year:
-            year = month[:4]
-            lines += [f"## {year}", ""]
-        lines.append(f"### {month}")
-        lines += [f"- [[{n}]]" for n in timeline[month]]
-        lines.append("")
-    (gen / "Timeline.md").write_text("\n".join(lines), encoding="utf-8")
+def _write_timeline(gen: Path, summaries: list[dict]) -> None:
+    lines = ["# Timeline", "", "*Every event in the archive, newest year first. Generated.*", ""]
+    by_year: dict[str, list[dict]] = {}
+    for e in summaries:
+        by_year.setdefault(e["date"][:4], []).append(e)
+    for year in sorted(by_year, reverse=True):
+        lines.append(f"- [[{year}]]: {len(by_year[year])} events")
+    (gen / "Timeline.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_years(gen: Path, summaries: list[dict]) -> list[str]:
+    by_year: dict[str, list[dict]] = {}
+    for e in summaries:
+        by_year.setdefault(e["date"][:4], []).append(e)
+    for year, evs in by_year.items():
+        places = Counter(e["city"] for e in evs if e["city"])
+        lines = ["---", "type: year", f"year: {year}", f"events: {len(evs)}",
+                 f"places: {_yaml_list([p for p, _ in places.most_common(8)])}", "---",
+                 f"# {year}", "",
+                 f"*{len(evs)} events, {sum(e['items'] for e in evs)} photos/videos, "
+                 f"{sum(e['video_min'] for e in evs):.0f} min of video. Main places: "
+                 f"{', '.join(p for p, _ in places.most_common(5)) or 'unknown'}.*", ""]
+        month = None
+        for e in evs:
+            if e["date"][:7] != month:
+                month = e["date"][:7]
+                lines += ["", f"## {datetime.strptime(month, '%Y-%m'):%B %Y}"]
+            best = " ".join(f"`m{i}`" for i in e["best"])
+            lines.append(f"- [[{e['name']}]] · {e['items']} items · {', '.join(e['tags'][:4])}"
+                         + (f" · best: {best}" if best else ""))
+        (gen / "Years" / f"{year}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return sorted(by_year, reverse=True)
+
+
+def _write_places(gen: Path, summaries: list[dict]) -> list[str]:
+    by_city: dict[str, list[dict]] = {}
+    for e in summaries:
+        if e["city"]:
+            by_city.setdefault(e["city"], []).append(e)
+    for city, evs in by_city.items():
+        lines = ["---", "type: place", f"place: {_q(evs[0]['place'])}", f"events: {len(evs)}",
+                 f"first: {evs[0]['date']}", f"last: {evs[-1]['date']}", "---", f"# {city}", "",
+                 f"*{len(evs)} events between {evs[0]['date']} and {evs[-1]['date']}.*", ""]
+        lines += [f"- [[{e['name']}]] · {e['items']} items · {', '.join(e['tags'][:4])}" for e in evs]
+        (gen / "Places" / f"{_slug(city)}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return sorted(by_city, key=lambda c: -len(by_city[c]))
+
+
+THEME_MIN_MOMENTS = 3
+THEME_MAX = 60
+THEME_MOMENTS = 80
+
+
+def _write_themes(gen: Path, media_by_id: dict, moments_by_media: dict, event_of: dict) -> list[str]:
+    """One page per content theme ("founder grind", "bike rides", ...) listing the best moments
+    for it, so a script beat can be matched to footage by reading a single page."""
+    by_theme: dict[str, list] = {}
+    for mid, moments in moments_by_media.items():
+        if mid not in media_by_id:
+            continue
+        for mo in moments:
+            for theme in {t.strip().lower() for t in jloads(mo["content_uses"]) if t.strip()}:
+                by_theme.setdefault(theme, []).append(mo)
+    ranked = sorted((t for t in by_theme if len(by_theme[t]) >= THEME_MIN_MOMENTS),
+                    key=lambda t: -len(by_theme[t]))[:THEME_MAX]
+    for theme in ranked:
+        moments = sorted(by_theme[theme], key=lambda mo: (-(mo["broll_score"] or 0),
+                                                          media_by_id[mo["media_id"]]["taken_at"]))
+        vertical = sum(1 for mo in moments if media_by_id[mo["media_id"]]["orientation"] == "vertical")
+        lines = ["---", "type: theme", f"theme: {_q(theme)}", f"moments: {len(moments)}",
+                 f"vertical: {vertical}", "---", f"# {theme.title()}", "",
+                 f"*{len(moments)} moments ({vertical} vertical). Best B-roll first; "
+                 f"showing up to {THEME_MOMENTS}. Pull clips with `crag pull m<id> ...`.*", ""]
+        for mo in moments[:THEME_MOMENTS]:
+            m = media_by_id[mo["media_id"]]
+            lines.append(_moment_line(mo, m, event_of.get(m["id"])) + f" · {m['taken_at'][:10]}")
+        (gen / "Themes" / f"{_slug(theme)}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return ranked
+
+
+def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str], places: list[str],
+                 themes: list[str], broll: int) -> None:
+    videos = [m for m in media if m["kind"] == "video"]
+    lines = [
+        "# Start here", "",
+        "*The map of the footage archive. Generated by `crag vault`; read this first, then drill down.*", "",
+        f"- **{len(videos)} videos** ({sum(m['duration'] or 0 for m in videos) / 3600:.1f} h) and "
+        f"**{len(media) - len(videos)} photos**, grouped into **{len(summaries)} events**",
+        f"- **{broll}** purpose-shot brand B-roll clips → `_generated/Broll/`, gallery in `Library.base`",
+        f"- Covers {summaries[0]['date'] if summaries else '?'} to {summaries[-1]['date'] if summaries else '?'}",
+        "", "## Years", *[f"- [[{y}]]" for y in years],
+        "", "## Places (most events first)", *[f"- [[{_slug(p)}]]" for p in places[:30]],
+        "", "## Themes (best moments per content theme)", *[f"- [[{_slug(t)}]]" for t in themes],
+        "", "## How to use this for a video",
+        "1. Read `Me.md` and the relevant `Eras/` + `Stories/` notes for the story.",
+        "2. For each beat of the script, open the matching Theme page, Year/Event, or run",
+        "   `crag search \"<what should be on screen>\" --vertical --min-broll 3 --json`.",
+        "3. Moments are listed as `m<id>` with in/out times, orientation and a B-roll score (B1–B5).",
+        "4. `crag pull m12 m48 m7 --name my-reel` cuts those moments from the originals into",
+        "   `library/exports/my-reel/` with a Premiere timeline (`timeline.xml`) and `selects.json`.",
+    ]
+    (gen / "Index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_base(vault: Path) -> None:
@@ -212,6 +331,7 @@ def _write_base(vault: Path) -> None:
   or:
     - file.inFolder("_generated/Broll")
     - file.inFolder("_generated/Events")
+    - file.inFolder("_generated/Themes")
 views:
   - type: cards
     name: "Brand B-roll"
@@ -316,5 +436,5 @@ def _scaffold(vault: Path) -> None:
             p.write_text(text, encoding="utf-8")
     claude_md = vault / "CLAUDE.md"
     src = Path(__file__).with_name("vault_CLAUDE.md")
-    if not claude_md.exists() and src.exists():
-        shutil.copyfile(src, claude_md)
+    if src.exists() and (not claude_md.exists() or "<!-- custom -->" not in claude_md.read_text(encoding="utf-8")):
+        shutil.copyfile(src, claude_md)  # keep the rules in sync with the vault layout

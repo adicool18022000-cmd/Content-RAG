@@ -14,4 +14,9 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   `describe.retry_model`). Both write through `describe.store_result`.
 - Dashboard: `crag ui` (`contentrag/ui.py` + `ui.html`), bound to 127.0.0.1. API keys come from
   environment variables and must never be sent to the page.
+- Unattended runs: `crag autopilot` (`contentrag/autopilot.py`): preflight checks, quota/network
+  waits, MAX_ATTEMPTS (db.py) retries, spending cap, lock file, STOP file, state in
+  `library_dir/autopilot.json`. Errors that aren't the file's fault (429, network, bad key,
+  unplugged drive) must leave requests `pending` without using an attempt.
+- `crag pull m<id> ...` (`contentrag/pull.py`) cuts moments + `selects.json` + FCP7 `timeline.xml`.
 - Never write inside the footage roots; everything generated goes under `library_dir`.

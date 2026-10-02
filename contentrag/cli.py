@@ -129,6 +129,28 @@ def cmd_vault(args):
     print(json.dumps(build_vault(cfg, conn), indent=2))
 
 
+def cmd_pull(args):
+    from .pull import parse_ids, pull
+
+    cfg, conn = _open(args)
+    print(json.dumps(pull(cfg, conn, parse_ids(args.moments), args.name, handles=args.handles), indent=2))
+
+
+def cmd_autopilot(args):
+    from .autopilot import Autopilot, Busy
+
+    cfg = load_config(args.config)
+    try:
+        result = Autopilot(cfg, hours=args.hours).run()
+    except Busy as e:
+        raise SystemExit(str(e))
+    except KeyboardInterrupt:
+        raise SystemExit("\nStopped. Run `crag autopilot` again to continue where it left off.")
+    print(result["summary"])
+    for p in result["problems"][:20]:
+        print(f"  [{p['status']}] {p['file']}: {p['error']}")
+
+
 def cmd_ui(args):
     from .ui import serve
 
@@ -195,6 +217,16 @@ def main(argv=None):
     sp.set_defaults(fn=cmd_search)
 
     sub.add_parser("vault", help="rebuild the Obsidian vault's generated notes").set_defaults(fn=cmd_vault)
+
+    sp = sub.add_parser("pull", help="cut moments (m12 m48 ...) from the originals + Premiere timeline")
+    sp.add_argument("moments", nargs="+", help="moment ids from search/vault, e.g. m12 m48 or 12,48")
+    sp.add_argument("--name", default="selects", help="export folder name (library_dir/exports/<name>)")
+    sp.add_argument("--handles", type=float, default=0.5, help="extra seconds before/after each moment")
+    sp.set_defaults(fn=cmd_pull)
+
+    sp = sub.add_parser("autopilot", help="run everything unattended until done (overnight)")
+    sp.add_argument("--hours", type=float, default=24, help="give up waiting after this many hours (default 24)")
+    sp.set_defaults(fn=cmd_autopilot)
 
     sp = sub.add_parser("ui", help="local dashboard in your browser (http://127.0.0.1:8765)")
     sp.add_argument("--port", type=int, default=8765)
