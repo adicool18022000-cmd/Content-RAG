@@ -79,9 +79,13 @@ def client(cfg: Config):
 
 
 def list_models(cfg: Config) -> list[str]:
+    # Keep a reference to the client while paging: genai.Client closes its HTTP connection
+    # when garbage-collected, which breaks the lazy pager mid-iteration.
+    gclient = client(cfg)
+    models = list(gclient.models.list())
     return sorted(
         m.name.removeprefix("models/")
-        for m in client(cfg).models.list()
+        for m in models
         if "generateContent" in (getattr(m, "supported_actions", None) or ["generateContent"])
     )
 
