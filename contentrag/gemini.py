@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .config import Config
 from .db import MAX_ATTEMPTS
-from .describe import PHOTO_SCHEMA, VIDEO_SCHEMA, plan_requests, store_result
+from .describe import PHOTO_SCHEMA, SYSTEM, VIDEO_SCHEMA, plan_requests, store_result
 from .util import fmt_ts, source_path
 
 INLINE_LIMIT = 8 * 1024 * 1024  # bigger proxies go through the Files API (more reliable for long clips)
@@ -47,7 +47,10 @@ vehicles, screens (what app or content is visible), text on signs, sounds and mu
 anyone's name or identity; describe people by appearance and role ("a young man in a black \
 hoodie", "a group of friends"). Listen to the audio: put an English gist of the speech in \
 speech_en and, when asked, a transcript in the original language (Hindi in Devanagari, English \
-words as spoken). Judge B-roll quality honestly."""
+words as spoken). Judge B-roll quality honestly.
+
+The file path's folder names are the creator's own labels (trip names, semesters...): use them as
+context for what the footage is about.""" + SYSTEM[SYSTEM.index("\n\nContent roles"):]
 
 TRANSCRIPT_PROP = {
     "type": "array",

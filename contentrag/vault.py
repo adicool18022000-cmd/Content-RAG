@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .config import Config
 from .db import jloads
+from .usage import collection_hidden, hidden_ranges, hidden_sets, safe_parts
 from .util import fmt_ts
 
 EVENT_GAP_HOURS = 4
@@ -84,17 +85,32 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
     gen = vault / "_generated"
     if gen.exists():
         shutil.rmtree(gen)
-    for sub in ("Events", "Broll", "Years", "Places", "Themes"):
+    for sub in ("Events", "Broll", "Years", "Places", "Themes", "Collections"):
         (gen / sub).mkdir(parents=True)
     _scaffold(vault)
 
-    media = conn.execute(
+    hidden = hidden_sets(conn)
+    media = [m for m in conn.execute(
         "SELECT * FROM media WHERE described=1 AND skip_reason IS NULL AND taken_at IS NOT NULL "
         "ORDER BY taken_at").fetchall()
+        if m["id"] not in hidden["media"] and not collection_hidden(m["collection"], hidden["collection"])]
+    media_by_id = {m["id"]: m for m in media}
+    use_counts = _use_counts(conn)
     moments_by_media: dict[str, list] = {}
     for mo in conn.execute("SELECT * FROM moments ORDER BY media_id, start"):
+        m = media_by_id.get(mo["media_id"])
+        if m is None or str(mo["id"]) in hidden["moment"]:
+            continue
+        mo = dict(mo)
+        mo["uses"] = use_counts.get(mo["id"], 0)
+        if hidden["person"] and m["kind"] == "video":
+            blocked = hidden_ranges(conn, mo["media_id"], hidden["person"])
+            if blocked:
+                parts = safe_parts(mo["start"], mo["end"], blocked)
+                if not parts:
+                    continue  # a hidden person is on screen the whole time
+                mo["start"], mo["end"] = max(parts, key=lambda p: p[1] - p[0])
         moments_by_media.setdefault(mo["media_id"], []).append(mo)
-    media_by_id = {m["id"]: m for m in media}
 
     archive = [m for m in media if m["root_kind"] == "archive"]
     events = cluster_events(archive)
@@ -114,19 +130,31 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
     years = _write_years(gen, summaries)
     places = _write_places(gen, summaries)
     themes = _write_themes(gen, media_by_id, moments_by_media, event_of)
+    collections = _write_collections(gen, media, moments_by_media, event_of, conn)
+    _write_ideas(gen, media_by_id, moments_by_media, event_of, collections)
+    _write_people(cfg, conn, vault, gen)
     _write_timeline(gen, summaries)
-    _write_index(gen, media, summaries, years, places, themes, len(broll))
+    _write_index(gen, media, summaries, years, places, themes, len(broll), collections)
     _write_base(vault)
-    log(f"[vault] {len(events)} events, {len(broll)} B-roll notes, {len(themes)} themes -> {vault}")
-    return {"events": len(events), "broll": len(broll), "themes": len(themes), "vault": str(vault)}
+    log(f"[vault] {len(events)} events, {len(collections)} collections, {len(broll)} B-roll notes, "
+        f"{len(themes)} themes -> {vault}")
+    return {"events": len(events), "collections": len(collections), "broll": len(broll), "themes": len(themes),
+            "vault": str(vault)}
+
+
+def _use_counts(conn) -> dict[int, int]:
+    return {r["moment_id"]: r["n"] for r in conn.execute(
+        "SELECT moment_id, count(*) n FROM usage WHERE moment_id IS NOT NULL GROUP BY moment_id")}
 
 
 def _moment_line(mo, m, link: str | None = None) -> str:
-    """One searchable, pullable line per moment: id, in/out, orientation, score, what happens."""
+    """One searchable, pullable line per moment: id, in/out, orientation, scores, what happens."""
     where = f" · [[{link}]]" if link else ""
     speech = f" — “{mo['speech_en']}”" if mo["speech_en"] else ""
     span = f"{fmt_ts(mo['start'])}–{fmt_ts(mo['end'])}" if m["kind"] == "video" else "photo"
-    return (f"- `m{mo['id']}` {span} · {m['orientation'] or '?'} · B{mo['broll_score']} · "
+    hook = f" · H{mo['hook_score']}" if (mo.get("hook_score") or 0) >= 3 else ""
+    used = f" · used×{mo['uses']}" if mo.get("uses") else ""
+    return (f"- `m{mo['id']}` {span} · {m['orientation'] or '?'} · B{mo['broll_score']}{hook}{used} · "
             f"{mo['description']}{speech}{where}")
 
 
@@ -302,8 +330,159 @@ def _write_themes(gen: Path, media_by_id: dict, moments_by_media: dict, event_of
     return ranked
 
 
+ROLE_SECTIONS = [
+    ("hook", "🪝 Hooks (stop the scroll)"),
+    ("spectacle", "🔥 Spectacle"),
+    ("cinematic", "🎬 Cinematic"),
+    ("story_to_camera", "🗣️ Told to camera"),
+    ("funny", "😂 Funny"),
+    ("emotional", "💛 Emotional"),
+    ("friends", "👥 Friends / people"),
+    ("establishing", "🏙️ Establishing shots"),
+    ("transition", "🚶 Transitions"),
+    ("action", "⚡ Action"),
+    ("food", "🍜 Food"),
+    ("calm", "🌊 Calm"),
+    ("work", "💻 Work"),
+]
+PER_SECTION = 10
+
+
+def _roles(mo) -> list[str]:
+    return jloads(mo.get("roles"))
+
+
+def _rank(mo) -> tuple:
+    """Best first: strong hook/B-roll, fewer previous uses."""
+    return (-(mo.get("hook_score") or 0) - (mo.get("broll_score") or 0) + 1.5 * (mo.get("uses") or 0),)
+
+
+def _recipes(moments: list[dict], media_by_id: dict, n: int = 3) -> list[str]:
+    """Ready-made reel outlines: hook -> story -> B-roll -> cinematic close, from different moments."""
+    seeds = sorted((mo for mo in moments if mo.get("story_seed")), key=_rank)
+    out = []
+    for seed in seeds[:n]:
+        taken = {seed["id"]}
+
+        def pick(role, exclude=taken):
+            cands = sorted((mo for mo in moments if role in _roles(mo) and mo["id"] not in exclude), key=_rank)
+            if cands:
+                exclude.add(cands[0]["id"])
+                return cands[0]
+            return None
+
+        hook = pick("hook")
+        broll = [x for x in (pick("establishing"), pick("cinematic"), pick("friends")) if x]
+        close = pick("cinematic") or pick("calm")
+        parts = []
+        if hook:
+            parts.append(f"hook `m{hook['id']}` ({hook['description'][:60]})")
+        parts.append(f"story `m{seed['id']}`")
+        if broll:
+            parts.append("b-roll " + " ".join(f"`m{b['id']}`" for b in broll))
+        if close:
+            parts.append(f"close `m{close['id']}`")
+        out.append(f"- **{seed['story_seed']}** → " + " → ".join(parts))
+    return out
+
+
+def _write_collections(gen: Path, media: list, moments_by_media: dict, event_of: dict, conn) -> list[str]:
+    by_coll: dict[str, list] = {}
+    for m in media:
+        if m["collection"]:
+            by_coll.setdefault(m["collection"], []).append(m)
+    names = []
+    for coll, items in sorted(by_coll.items(), key=lambda kv: kv[1][0]["taken_at"] or ""):
+        media_by_id = {m["id"]: m for m in items}
+        moments = [mo for m in items for mo in moments_by_media.get(m["id"], [])]
+        if not moments:
+            continue
+        places = Counter(_city(m["place"]) for m in items if m["place"])
+        role_counts = Counter(r for mo in moments for r in _roles(mo))
+        used = Counter(r["video"] for r in conn.execute(
+            f"SELECT video FROM usage WHERE media_id IN ({','.join('?' * len(items))})", [m["id"] for m in items]))
+        first, last = items[0]["taken_at"][:10], items[-1]["taken_at"][:10]
+        lines = ["---", "type: collection", f"collection: {_q(coll)}", f"items: {len(items)}",
+                 f"first: {first}", f"last: {last}",
+                 f"places: {_yaml_list([p for p, _ in places.most_common(6)])}",
+                 f"hooks: {role_counts.get('hook', 0)}", f"story_seeds: {sum(1 for mo in moments if mo.get('story_seed'))}",
+                 f"times_used: {sum(used.values())}", "---",
+                 f"# {coll}", "",
+                 f"*{len(items)} photos/videos, {first} → {last}"
+                 + (f", in {', '.join(p for p, _ in places.most_common(4))}" if places else "") + ".*", ""]
+        summaries = [m["summary"] for m in items if m["summary"]][:4]
+        if summaries:
+            lines += ["## What this was", *[f"- {x.strip()}" for x in summaries], ""]
+        evs = sorted({event_of[m["id"]] for m in items if m["id"] in event_of})
+        if len(evs) > 1:
+            lines += ["## Parts (by date and place)", *[f"- [[{e}]]" for e in evs], ""]
+        seeds = sorted((mo for mo in moments if mo.get("story_seed")), key=_rank)
+        if seeds:
+            lines += ["## Story seeds (things that happened - reel material)"]
+            lines += [f"- **{mo['story_seed']}** · `m{mo['id']}` "
+                      f"{fmt_ts(mo['start'])}–{fmt_ts(mo['end'])}"
+                      + (" · told to camera" if "story_to_camera" in _roles(mo) else "")
+                      + (f" · used×{mo['uses']}" if mo.get("uses") else "") for mo in seeds[:15]]
+            lines.append("")
+        for role, title in ROLE_SECTIONS:
+            picks = sorted((mo for mo in moments if role in _roles(mo)), key=_rank)[:PER_SECTION]
+            if picks:
+                lines += [f"## {title}", *[_moment_line(mo, media_by_id[mo["media_id"]]) for mo in picks], ""]
+        recipes = _recipes(moments, media_by_id)
+        if recipes:
+            lines += ["## Reel ideas", *recipes, ""]
+        if used:
+            lines += ["## Already used in", *[f"- {v} ({n} clips)" for v, n in used.most_common()], ""]
+        (gen / "Collections" / f"{_slug(coll, 80)}.md").write_text("\n".join(lines), encoding="utf-8")
+        names.append(coll)
+    return names
+
+
+def _write_ideas(gen: Path, media_by_id: dict, moments_by_media: dict, event_of: dict, collections: list[str]):
+    moments = [mo for ms in moments_by_media.values() for mo in ms]
+    seeds = sorted((mo for mo in moments if mo.get("story_seed")), key=_rank)
+    gems = sorted((mo for mo in moments if not mo.get("uses") and
+                   ((mo.get("hook_score") or 0) >= 4 or (mo.get("broll_score") or 0) >= 5)), key=_rank)
+    lines = ["# Ideas", "",
+             "*Story seeds and unused strong moments from the whole library, best first. Use them when "
+             "there's no idea yet; each id can go straight into `crag pull`.*", "",
+             "## Story seeds"]
+    for mo in seeds[:80]:
+        m = media_by_id[mo["media_id"]]
+        where = m["collection"] or event_of.get(m["id"], "")
+        lines.append(f"- **{mo['story_seed']}** · `m{mo['id']}` · {m['taken_at'][:10]} · {where}"
+                     + (" · told to camera" if "story_to_camera" in _roles(mo) else "")
+                     + (f" · used×{mo['uses']}" if mo.get("uses") else ""))
+    lines += ["", "## Unused gems (strong hook or B-roll, never used yet)"]
+    lines += [_moment_line(mo, media_by_id[mo["media_id"]], event_of.get(mo["media_id"])) for mo in gems[:60]]
+    if collections:
+        lines += ["", "## Collections with ideas", *[f"- [[{_slug(c, 80)}]]" for c in collections]]
+    (gen / "Ideas.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_people(cfg: Config, conn, vault: Path, gen: Path) -> None:
+    rows = conn.execute(
+        "SELECT p.*, (SELECT count(DISTINCT media_id) FROM faces f WHERE f.person_id=p.id) AS clips "
+        "FROM people p WHERE p.faces >= 3 ORDER BY (p.name IS NULL), p.faces DESC LIMIT 200").fetchall()
+    lines = ["# People", "",
+             "*Face groups found on this Mac. Name one with `crag people name <id> <name>` (same name = same "
+             "person), hide someone everywhere with `crag people hide <name>`.*", ""]
+    for p in rows:
+        img = ""
+        if p["sample"]:
+            src = cfg.library_dir / p["sample"]
+            dst = vault / "_assets" / "people" / f"{p['id']}.jpg"
+            if src.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+                img = f" ![[_assets/people/{p['id']}.jpg|60]]"
+        lines.append(f"- **#{p['id']} {p['name'] or '(unnamed)'}**{' · HIDDEN' if p['hidden'] else ''} · "
+                     f"{p['faces']} faces in {p['clips']} clips{img}")
+    (gen / "People.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str], places: list[str],
-                 themes: list[str], broll: int) -> None:
+                 themes: list[str], broll: int, collections: list[str] | None = None) -> None:
     videos = [m for m in media if m["kind"] == "video"]
     lines = [
         "# Start here", "",
@@ -312,6 +491,10 @@ def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str]
         f"**{len(media) - len(videos)} photos**, grouped into **{len(summaries)} events**",
         f"- **{broll}** purpose-shot brand B-roll clips → `_generated/Broll/`, gallery in `Library.base`",
         f"- Covers {summaries[0]['date'] if summaries else '?'} to {summaries[-1]['date'] if summaries else '?'}",
+        "", "## Collections (your folders, best clips by purpose)",
+        *[f"- [[{_slug(c, 80)}]]" for c in (collections or [])],
+        "- [[Ideas]]: story seeds and ready-made reel recipes from the whole library",
+        "- [[People]]: face groups (named / hidden)",
         "", "## Years", *[f"- [[{y}]]" for y in years],
         "", "## Places (most events first)", *[f"- [[{_slug(p)}]]" for p in places[:30]],
         "", "## Themes (best moments per content theme)", *[f"- [[{_slug(t)}]]" for t in themes],
@@ -319,7 +502,8 @@ def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str]
         "1. Read `Me.md` and the relevant `Eras/` + `Stories/` notes for the story.",
         "2. For each beat of the script, open the matching Theme page, Year/Event, or run",
         "   `crag search \"<what should be on screen>\" --vertical --min-broll 3 --json`.",
-        "3. Moments are listed as `m<id>` with in/out times, orientation and a B-roll score (B1–B5).",
+        "3. Moments are listed as `m<id>` with in/out times, orientation, B-roll quality (B1–B5),",
+        "   hook strength (H3–H5) and how often they've been used (used×N). Prefer fresh ones.",
         "4. `crag pull m12 m48 m7 --name my-reel` cuts those moments from the originals into",
         "   `library/exports/my-reel/` with a Premiere timeline (`timeline.xml`) and `selects.json`.",
     ]

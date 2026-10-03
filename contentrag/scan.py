@@ -96,6 +96,9 @@ def scan(cfg: Config, conn, log=print) -> dict:
     if stats["still_copying"]:
         log(f"[scan] {stats['still_copying']} files changed in the last {SETTLE_SECONDS // 60} min "
             "(still copying?) - they will be picked up by the next scan")
+    from .collections import backfill_collections
+
+    backfill_collections(conn)
     stats["removed"] = prune_missing(cfg, conn, log)
     stats["skipped"] = mark_skips(conn)
     geocode(conn, log)

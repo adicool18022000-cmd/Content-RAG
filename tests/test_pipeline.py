@@ -197,7 +197,15 @@ class _FakeModels:
                 "moments": [{"start": 0.0, "end": 2.0, "shot_type": "wide", "camera_motion": "static",
                              "energy": "low", "speech_en": "let's go", "description": "Colour bars on a screen.",
                              "action": "nothing", "setting": "studio", "people_count": 0, "mood": "calm",
-                             "quality_issues": [], "broll_score": 2, "content_uses": [], "tags": ["bars"]}]}
+                             "quality_issues": [], "broll_score": 2, "content_uses": [], "tags": ["bars"],
+                             "content_roles": ["hook", "funny"], "hook_score": 5, "motion": 4,
+                             "story_seed": "Tuk-tuk driver took us to the wrong island"},
+                            {"start": 2.0, "end": 6.0, "shot_type": "wide", "camera_motion": "pan",
+                             "energy": "low", "speech_en": "", "description": "Sunset over the beach.",
+                             "action": "watching sunset", "setting": "beach", "people_count": 0, "mood": "calm",
+                             "quality_issues": [], "broll_score": 5, "content_uses": ["travel"], "tags": ["sunset"],
+                             "content_roles": ["cinematic", "establishing"], "hook_score": 2, "motion": 2,
+                             "story_seed": ""}]}
         else:  # photos
             n = sum(1 for c in contents if isinstance(c, types.Part))
             data = {"photos": [{"index": i + 1, "title": "Orange", "shot_type": "wide", "description": "Orange.",
@@ -228,7 +236,7 @@ def test_gemini_backend(env, monkeypatch):
     goa = conn.execute("SELECT md.id FROM media md JOIN locations l ON l.media_id=md.id "
                        "WHERE l.relpath='2023/goa.mov'").fetchone()["id"]
     starts = [r[0] for r in conn.execute("SELECT start FROM moments WHERE media_id=? ORDER BY start", (goa,))]
-    assert starts == [0.0, 10.0]  # second excerpt shifted by its 10 s offset
+    assert starts == [0.0, 2.0, 10.0]  # second excerpt shifted by its 10 s offset
     tr = conn.execute("SELECT start, text FROM transcript WHERE media_id=? ORDER BY start", (goa,)).fetchall()
     assert [(t["start"], t["text"]) for t in tr] == [(0.5, "चलो"), (10.5, "चलो")]
     assert gemini.spent(cfg, conn)["usd"] > 0
@@ -539,3 +547,132 @@ def test_bad_key_and_network_do_not_burn_attempts(env, monkeypatch):
     assert stats["network"] and stats["pending"] == 3
     assert conn.execute("SELECT max(coalesce(attempts,0)) FROM requests").fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM requests WHERE status='pending'").fetchone()[0] == 5
+
+
+# ---------------------------------------------------------------- collections, usage, hide list
+
+def test_collection_names():
+    from contentrag.collections import collection_of
+
+    assert collection_of("College/Sem 5/DCIM/100APPLE/IMG_1.MOV") == "College / Sem 5"
+    assert collection_of("Thailand Trip/IMG_2.MOV") == "Thailand Trip"
+    assert collection_of("WhatsApp Video/2023/x.mp4") is None
+    assert collection_of("IMG_3.MOV") is None
+    assert collection_of("Phone dump 2025-26/Camera/x.mov") == "Phone dump 2025-26"
+
+
+def _analysed(env, monkeypatch):
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
+    gemini.run(cfg, conn, log=lambda *_: None)
+    return cfg, conn
+
+
+def test_hide_usage_and_partial_pull(env, monkeypatch):
+    from contentrag.pull import parse_items, pull
+    from contentrag.usage import hide, safe_parts, unhide, uses_of
+
+    cfg, conn = _analysed(env, monkeypatch)
+    assert conn.execute("SELECT collection FROM media WHERE relpath LIKE '2023/%' LIMIT 1").fetchone()[0] is None
+    res = search(cfg, conn, "colour bars", use_vectors=False, limit=50)
+    assert res and all(r["uses"] == 0 for r in res)
+    first = res[0]
+
+    # using part of a clip counts as a use for overlapping searches; ranking demotes it
+    items = parse_items([f"m{first['moment_id']}:{first['start']}-{min(first['end'], first['start'] + 1.0)}"])
+    assert items[0]["end"] == min(first["end"], first["start"] + 1.0)
+    out = pull(cfg, conn, items, "reel one", log=lambda *_: None)
+    assert out["pulled"] == 1
+    assert len(uses_of(conn, first["media_id"])) == 1
+    again = {r["moment_id"]: r for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50)}
+    assert again[first["moment_id"]]["uses"] == 1 and again[first["moment_id"]]["used_in"] == ["reel one"]
+    fresh = search(cfg, conn, "colour bars", Filters(fresh=True), use_vectors=False, limit=50)
+    assert first["moment_id"] not in {r["moment_id"] for r in fresh}
+
+    # hide a whole clip, then unhide
+    hide(conn, "media", first["media_id"], "test")
+    assert first["media_id"] not in {r["media_id"] for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50)}
+    assert pull(cfg, conn, [first["moment_id"]], "x", log=lambda *_: None)["skipped"]
+    unhide(conn, "media", first["media_id"])
+    assert first["media_id"] in {r["media_id"] for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50)}
+
+    # privacy trimming math
+    assert safe_parts(0, 10, [(3, 5)]) == [(0, 3), (5, 10)]
+    assert safe_parts(0, 10, [(0, 9)]) == []
+    assert safe_parts(0, 10, [(2, 3), (2.5, 9.5)], min_len=0.5) == [(0, 2), (9.5, 10)]
+
+
+def test_faces_group_name_merge_hide(env, monkeypatch):
+    import re
+
+    import numpy as np
+
+    from contentrag.faces import find_faces, hide_people, list_people, name_person
+    from contentrag.pull import pull
+    from contentrag.usage import hidden_ranges
+
+    cfg, conn = _analysed(env, monkeypatch)
+    goa = conn.execute("SELECT md.id FROM media md JOIN locations l ON l.media_id=md.id "
+                       "WHERE l.relpath='2023/goa.mov'").fetchone()["id"]
+    a = np.zeros(128, np.float32); a[0] = 1
+    b = np.zeros(128, np.float32); b[1] = 1
+    a2 = np.zeros(128, np.float32); a2[0] = 0.3; a2[2] = 0.95; a2 /= np.linalg.norm(a2)  # A, different angle
+
+    class Fake:
+        def faces(self, frame):
+            p = str(frame)
+            m = re.search(r"t(\d+\.\d+)\.jpg$", p)
+            d = re.search(r"f(\d+)\.jpg$", p)
+            t = float(m.group(1)) if m else (int(d.group(1)) - 0.5) if d else 0.0
+            if goa in p and 4 <= t <= 8:
+                return [((10, 10, 80, 80), 0.99, a)]
+            if goa in p:
+                return []
+            return [((10, 10, 80, 80), 0.99, b)]
+
+    res = find_faces(cfg, conn, eng=Fake(), log=lambda *_: None)
+    assert res["people"] == 2
+    people = {p["id"]: p for p in list_people(conn, min_faces=1)}
+    pa = next(pid for pid, p in people.items()
+              if conn.execute("SELECT 1 FROM faces WHERE person_id=? AND media_id=?", (pid, goa)).fetchone())
+    # an extra group for the same person (other angle) gets merged by giving it the same name
+    extra = conn.execute("INSERT INTO people(faces, centroid) VALUES (1, ?)", (a2.tobytes(),)).lastrowid
+    name_person(conn, pa, "Ex")
+    kept = name_person(conn, extra, "Ex")
+    assert kept == pa and not conn.execute("SELECT 1 FROM people WHERE id=?", (extra,)).fetchone()
+
+    out = hide_people(cfg, conn, "Ex", eng=Fake(), log=lambda *_: None)
+    assert out["rescanned"] == 1 and out["matches"] >= 4  # dense pass found her at 1 fps
+    ranges = hidden_ranges(conn, goa)
+    assert ranges and ranges[0][0] <= 4.0 and ranges[-1][1] >= 8.0
+    for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50):
+        if r["media_id"] == goa:
+            assert r["end"] <= 4.0 - 1.0 or r["start"] >= 8.0, r  # never overlaps her
+    mo = conn.execute("SELECT id FROM moments WHERE media_id=? AND start <= 5 AND end >= 7", (goa,)).fetchone()
+    if mo:
+        res = pull(cfg, conn, [mo["id"]], "privacy", log=lambda *_: None)
+        sel = json.loads((Path(res["folder"]) / "selects.json").read_text())
+        for s in sel:
+            assert s["source_out"] <= 4.0 or s["source_in"] >= 8.0
+
+
+def test_collection_notes_and_ideas(env, monkeypatch):
+    cfg, conn = env
+    _video(cfg.roots[0].path / "Thailand Trip" / "DCIM" / "fire.mov", "640x360", 7,
+           {"creation_time": "2025-11-14T13:00:00Z", "location": "+7.8804+098.3923/"})
+    cfg, conn = _analysed((cfg, conn), monkeypatch)
+    assert conn.execute("SELECT collection FROM media WHERE relpath LIKE 'Thailand%'").fetchone()[0] == "Thailand Trip"
+    hooks = search(cfg, conn, "", Filters(collection="thailand", roles=("hook",)), use_vectors=False)
+    assert hooks and all(r["collection"] == "Thailand Trip" and "hook" in r["roles"] for r in hooks)
+    build_vault(cfg, conn, log=lambda *_: None)
+    note = (cfg.vault_dir / "_generated" / "Collections" / "Thailand Trip.md").read_text()
+    for section in ("Story seeds", "Hooks", "Cinematic", "Reel ideas", "Tuk-tuk driver"):
+        assert section in note, section
+    ideas = (cfg.vault_dir / "_generated" / "Ideas.md").read_text()
+    assert "Tuk-tuk driver" in ideas and "Unused gems" in ideas
+    assert "[[Thailand Trip]]" in (cfg.vault_dir / "_generated" / "Index.md").read_text()

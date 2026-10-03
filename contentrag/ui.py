@@ -25,7 +25,7 @@ from .db import connect, failures
 from .util import source_path
 
 HTML = Path(__file__).with_name("ui.html")
-STEPS = ("scan", "prep", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
+STEPS = ("scan", "prep", "faces", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
 
 
 class Job:
@@ -98,6 +98,10 @@ class Job:
             from .prep import prep
 
             return prep(cfg, conn, log=log, stop=self.stop)
+        if s == "faces":
+            from .faces import find_faces, refine_hidden
+
+            return {**find_faces(cfg, conn, log=log, stop=self.stop), **refine_hidden(cfg, conn, log=log)}
         if s == "transcribe":
             if not cfg.transcribe_enabled:
                 return "skipped (transcribe.enabled = false)"
@@ -310,10 +314,10 @@ def make_handler(cfg: Config, job: Job):
                 if step == "autopilot":
                     job.hours = float(body.get("hours") or 24)
                 if step == "pull":
-                    from .pull import parse_ids
+                    from .pull import parse_items
 
                     try:
-                        ids = parse_ids([str(x) for x in body.get("ids") or []])
+                        ids = parse_items([str(x) for x in body.get("ids") or []])
                     except ValueError:
                         return self._json({"error": "bad moment ids"}, 400)
                     if not ids:

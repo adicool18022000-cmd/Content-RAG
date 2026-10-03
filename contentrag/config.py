@@ -45,6 +45,7 @@ class Config:
     frames_per_window: int = 36
     scene_detect: bool = True
     workers: int = 4
+    faces_enabled: bool = True
     embed_model: str = "BAAI/bge-m3"
     source: Path | None = field(default=None, repr=False)
 
@@ -130,6 +131,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         frames_per_window=int(p.get("frames_per_window", Config.frames_per_window)),
         scene_detect=bool(p.get("scene_detect", Config.scene_detect)),
         workers=int(p.get("workers", Config.workers)),
+        faces_enabled=bool(raw.get("faces", {}).get("enabled", Config.faces_enabled)),
         embed_model=e.get("model", Config.embed_model),
         source=path,
     )

@@ -106,14 +106,16 @@ def cmd_search(args):
     f = Filters(
         orientation=args.orientation, min_broll=args.min_broll, date_from=args.date_from, date_to=args.date_to,
         place=args.place, root_kind=args.root, kind=args.kind, min_seconds=args.min_seconds,
-        exclude_issues=tuple(args.exclude or ()),
+        exclude_issues=tuple(args.exclude or ()), collection=args.collection, roles=tuple(args.role or ()),
+        min_hook=args.min_hook, fresh=args.fresh, include_hidden=args.include_hidden,
     )
     results = search(cfg, conn, args.query or "", f, limit=args.limit, use_vectors=not args.no_vectors)
     if args.json:
         print(to_json(results))
     else:
         for i, r in enumerate(results, 1):
-            print(f"{i:>2}. [{r['in_out']}] B{r['broll_score']} {r['orientation'] or ''} "
+            print(f"{i:>2}. m{r['moment_id']} [{r['in_out']}] B{r['broll_score']} H{r['hook_score'] or '-'} "
+                  f"used×{r['uses']} {','.join(r['roles'])} {r['orientation'] or ''} "
                   f"{(r['taken_at'] or '')[:10]} {r['place'] or ''}\n    {r['description']}\n    {r['file']}")
     if args.html is not None:
         slug = re.sub(r"\W+", "-", args.query or "browse").strip("-")[:50] or "browse"
@@ -130,10 +132,76 @@ def cmd_vault(args):
 
 
 def cmd_pull(args):
-    from .pull import parse_ids, pull
+    from .pull import parse_items, pull
 
     cfg, conn = _open(args)
-    print(json.dumps(pull(cfg, conn, parse_ids(args.moments), args.name, handles=args.handles), indent=2))
+    print(json.dumps(pull(cfg, conn, parse_items(args.moments), args.name, handles=args.handles,
+                          reframe=args.reframe, page=args.page, style=args.style), indent=2))
+
+
+def cmd_faces(args):
+    from .faces import find_faces, refine_hidden
+
+    cfg, conn = _open(args)
+    print(json.dumps({**find_faces(cfg, conn, limit=args.limit), **refine_hidden(cfg, conn)}, indent=2))
+
+
+def cmd_people(args):
+    from .faces import hide_people, list_people, name_person, resolve_people
+    from .usage import unhide
+
+    cfg, conn = _open(args)
+    if args.action == "name":
+        kept = name_person(conn, int(args.ref.lstrip("#")), args.name)
+        print(f"group {args.ref} is now '{args.name}' (id {kept})")
+    elif args.action == "hide":
+        print(json.dumps(hide_people(cfg, conn, args.ref), indent=2))
+    elif args.action == "unhide":
+        for pid in resolve_people(conn, args.ref):
+            unhide(conn, "person", str(pid))
+        print(f"unhidden: {args.ref}")
+    else:
+        for p in list_people(conn, args.min_faces):
+            print(f"#{p['id']:<5} {p['name'] or '(unnamed)':<20} faces={p['faces']:<5} clips={p['clips']:<5} "
+                  f"{'HIDDEN ' if p['hidden'] else ''}{cfg.library_dir / p['sample'] if p['sample'] else ''}")
+
+
+def cmd_hide(args):
+    from .usage import hide, unhide
+
+    cfg, conn = _open(args)
+    (unhide if args.undo else hide)(conn, args.kind, args.ref, *([] if args.undo else [args.reason]))
+    print(f"{'unhidden' if args.undo else 'hidden'}: {args.kind} {args.ref}")
+
+
+def cmd_hidden(args):
+    cfg, conn = _open(args)
+    for r in conn.execute("SELECT * FROM hidden ORDER BY kind, ref"):
+        print(f"{r['kind']:<10} {r['ref']:<30} {r['reason'] or ''}")
+
+
+def cmd_collections(args):
+    from .collections import all_collections
+
+    cfg, conn = _open(args)
+    for c in all_collections(conn):
+        print(f"{c['items']:>6}  {(c['first'] or '')[:10]} → {(c['last'] or '')[:10]}  {c['name']}")
+
+
+def cmd_videos(args):
+    from .usage import set_posted, videos
+
+    cfg, conn = _open(args)
+    if args.posted:
+        metrics = {k: v for k, v in (("views", args.views), ("likes", args.likes), ("saves", args.saves),
+                                     ("shares", args.shares), ("comments", args.comments),
+                                     ("avg_watch_pct", args.retention)) if v is not None}
+        set_posted(conn, args.posted, metrics, args.notes)
+        print(f"marked posted: {args.posted}")
+        return
+    for v in videos(conn):
+        print(f"{v['status']:<7} {v['created_at'][:10]}  {v['name']:<30} page={v['page'] or '-'} "
+              f"style={v['style'] or '-'} clips={v['clips']} {v['metrics'] or ''}")
 
 
 def cmd_autopilot(args):
@@ -210,6 +278,11 @@ def main(argv=None):
     sp.add_argument("--kind", choices=["video", "photo"])
     sp.add_argument("--min-seconds", type=float)
     sp.add_argument("--exclude", action="append", help="quality issue to exclude, e.g. shaky (repeatable)")
+    sp.add_argument("--collection", help="folder label, partial match (e.g. thailand)")
+    sp.add_argument("--role", action="append", help="hook, cinematic, spectacle, story_to_camera, funny, ...")
+    sp.add_argument("--min-hook", type=int)
+    sp.add_argument("--fresh", action="store_true", help="only moments never used in a video")
+    sp.add_argument("--include-hidden", action="store_true")
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--json", action="store_true")
     sp.add_argument("--html", nargs="?", const="", help="write an HTML contact sheet (optional path)")
@@ -222,7 +295,38 @@ def main(argv=None):
     sp.add_argument("moments", nargs="+", help="moment ids from search/vault, e.g. m12 m48 or 12,48")
     sp.add_argument("--name", default="selects", help="export folder name (library_dir/exports/<name>)")
     sp.add_argument("--handles", type=float, default=0.5, help="extra seconds before/after each moment")
+    sp.add_argument("--reframe", choices=["crop", "blur"], help="make horizontal clips 9:16 (crop or blurred fill)")
+    sp.add_argument("--page", help="which Instagram page this video is for")
+    sp.add_argument("--style", help="style profile used")
     sp.set_defaults(fn=cmd_pull)
+
+    sp = sub.add_parser("faces", help="find and group faces (local) so people can be named / hidden")
+    sp.add_argument("--limit", type=int)
+    sp.set_defaults(fn=cmd_faces)
+
+    sp = sub.add_parser("people", help="list face groups, name them, hide someone everywhere")
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "hide", "unhide"])
+    sp.add_argument("ref", nargs="?", help="group id (#7) or name")
+    sp.add_argument("name", nargs="?", help="for 'name': the person's name (same name = same person)")
+    sp.add_argument("--min-faces", type=int, default=3)
+    sp.set_defaults(fn=cmd_people)
+
+    sp = sub.add_parser("hide", help="never suggest a moment / clip / collection / person (privacy)")
+    sp.add_argument("kind", choices=["moment", "media", "collection", "person"])
+    sp.add_argument("ref", help="m123 | media id | collection name | person id")
+    sp.add_argument("--reason")
+    sp.add_argument("--undo", action="store_true", help="remove from the hide list")
+    sp.set_defaults(fn=cmd_hide)
+    sub.add_parser("hidden", help="show the hide list").set_defaults(fn=cmd_hidden)
+    sub.add_parser("collections", help="list collections (your folder labels)").set_defaults(fn=cmd_collections)
+
+    sp = sub.add_parser("videos", help="videos made from the library; mark one posted with its numbers")
+    sp.add_argument("--posted", metavar="NAME", help="mark this video as posted")
+    for flag in ("views", "likes", "saves", "shares", "comments"):
+        sp.add_argument(f"--{flag}", type=int)
+    sp.add_argument("--retention", type=float, help="average watch percentage")
+    sp.add_argument("--notes")
+    sp.set_defaults(fn=cmd_videos)
 
     sp = sub.add_parser("autopilot", help="run everything unattended until done (overnight)")
     sp.add_argument("--hours", type=float, default=24, help="give up waiting after this many hours (default 24)")

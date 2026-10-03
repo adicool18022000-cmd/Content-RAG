@@ -85,8 +85,59 @@ CREATE TABLE IF NOT EXISTS moments (
 CREATE INDEX IF NOT EXISTS moments_media ON moments(media_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS moments_fts USING fts5(
-    description, action, setting, tags, content_uses, speech, place, title,
+    description, action, setting, tags, content_uses, speech, place, title, roles, story, collection,
     tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TABLE IF NOT EXISTS videos (         -- every reel/edit made from the library
+    name       TEXT PRIMARY KEY,
+    created_at TEXT,
+    page       TEXT,                        -- which Instagram page
+    style      TEXT,                        -- style profile used
+    status     TEXT DEFAULT 'draft',        -- draft | posted
+    posted_at  TEXT,
+    metrics    TEXT,                        -- JSON: views, likes, saves, shares, retention...
+    notes      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS usage (          -- which part of which clip went into which video
+    id        INTEGER PRIMARY KEY,
+    video     TEXT NOT NULL,
+    media_id  TEXT NOT NULL,
+    start     REAL,
+    end       REAL,
+    moment_id INTEGER,
+    role      TEXT,                         -- hook | broll | story | beat ...
+    at        TEXT
+);
+CREATE INDEX IF NOT EXISTS usage_media ON usage(media_id);
+
+CREATE TABLE IF NOT EXISTS hidden (         -- never suggest these (privacy)
+    kind   TEXT NOT NULL,                   -- moment | media | collection | person
+    ref    TEXT NOT NULL,
+    reason TEXT,
+    PRIMARY KEY (kind, ref)
+);
+
+CREATE TABLE IF NOT EXISTS faces (          -- faces found in sampled frames (local, OpenCV)
+    id        INTEGER PRIMARY KEY,
+    media_id  TEXT NOT NULL,
+    t         REAL NOT NULL,
+    x INTEGER, y INTEGER, w INTEGER, h INTEGER,
+    score     REAL,
+    emb       BLOB NOT NULL,                -- float32 feature vector
+    person_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS faces_media ON faces(media_id);
+CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
+
+CREATE TABLE IF NOT EXISTS people (
+    id       INTEGER PRIMARY KEY,
+    name     TEXT,
+    hidden   INTEGER DEFAULT 0,
+    faces    INTEGER DEFAULT 0,
+    centroid BLOB,
+    sample   TEXT                           -- face crop path, relative to library_dir
 );
 
 CREATE TABLE IF NOT EXISTS requests (       -- one Claude request = one video window or photo group
@@ -112,7 +163,18 @@ def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _add_columns(conn, "requests", {"in_tokens": "INTEGER", "out_tokens": "INTEGER",
                                     "attempts": "INTEGER DEFAULT 0"})
-    _add_columns(conn, "media", {"attempts": "INTEGER DEFAULT 0", "skip_reason": "TEXT"})
+    _add_columns(conn, "media", {"attempts": "INTEGER DEFAULT 0", "skip_reason": "TEXT", "collection": "TEXT",
+                                 "faces_done": "INTEGER DEFAULT 0", "faces_dense": "INTEGER DEFAULT 0"})
+    _add_columns(conn, "moments", {"roles": "TEXT", "hook_score": "INTEGER", "story_seed": "TEXT",
+                                   "motion": "INTEGER"})
+    fts_cols = {r["name"] for r in conn.execute("PRAGMA table_info(moments_fts)")}
+    if "collection" not in fts_cols:  # older search index: rebuild with the new columns
+        conn.execute("DROP TABLE moments_fts")
+        conn.executescript(SCHEMA)
+        reindex_fts(conn)
+    from .collections import backfill_collections
+
+    backfill_collections(conn)
     conn.commit()
     return conn
 
@@ -149,12 +211,12 @@ def reindex_fts(conn: sqlite3.Connection, media_id: str | None = None) -> None:
     else:
         conn.execute("DELETE FROM moments_fts")
     rows = conn.execute(
-        f"""SELECT m.*, md.place, md.title FROM moments m JOIN media md ON md.id = m.media_id {where}""",
+        f"""SELECT m.*, md.place, md.title, md.collection FROM moments m JOIN media md ON md.id = m.media_id {where}""",
         args,
     ).fetchall()
     conn.executemany(
-        "INSERT INTO moments_fts(rowid, description, action, setting, tags, content_uses, speech, place, title)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO moments_fts(rowid, description, action, setting, tags, content_uses, speech, place, title,"
+        " roles, story, collection) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             (
                 r["id"],
@@ -166,6 +228,9 @@ def reindex_fts(conn: sqlite3.Connection, media_id: str | None = None) -> None:
                 r["speech_en"] or "",
                 r["place"] or "",
                 r["title"] or "",
+                " ".join(x.replace("_", " ") for x in jloads(r["roles"])),
+                r["story_seed"] or "",
+                r["collection"] or "",
             )
             for r in rows
         ],

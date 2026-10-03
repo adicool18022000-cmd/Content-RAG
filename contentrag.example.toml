@@ -73,6 +73,11 @@ workers = 4
 # (all runs together) passes this many US dollars. 0 = no cap.
 budget_usd = 60
 
+[faces]
+# Group faces into people on this Mac (OpenCV, nothing uploaded) so a person can be
+# hidden everywhere: `crag people`, then `crag people hide <name>`.
+enabled = true
+
 [prep]
 # Frames sampled per video: one every `min_interval` seconds, but at most
 # `frames_per_window` per `window_seconds` of footage (longer clips are

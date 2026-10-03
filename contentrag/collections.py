@@ -1,0 +1,46 @@
+"""Collections: the creator's own folder names ("Thailand Trip", "Summer Stay Hostel", "Sem 5")
+are the best labels in the archive. A clip's collection is the meaningful part of its folder
+path, with generic folders (DCIM, Camera, WhatsApp, 2023, New folder...) left out.
+"""
+
+from __future__ import annotations
+
+import re
+
+_GENERIC = {
+    "dcim", "camera", "camera roll", "photos", "photo", "pictures", "pics", "images", "videos", "video", "movies",
+    "media", "clips", "footage", "raw", "originals", "export", "exports", "exported", "import", "imports",
+    "downloads", "download", "new folder", "untitled folder", "untitled", "misc", "random", "other", "others",
+    "all", "backup", "backups", "copy", "iphone", "android", "phone", "mobile", "google photos", "takeout",
+    "whatsapp", "whatsapp video", "whatsapp images", "whatsapp video sent", "sent", "private", "screenshots",
+    "screen recordings", "archive", "brand_broll", "brand broll", "content", "temp", "tmp", "live photos",
+    "snapchat", "instagram", "telegram", "airdrop", "icloud photos",
+}
+_GENERIC_RE = re.compile(
+    r"^(\d{3}apple|\d{3}[a-z]{4,5}|\d{3,4}|\d{4}[-_ .]\d{1,2}([-_ .]\d{1,2})?|img|vid|dsc|new folder \(\d+\)|"
+    r"copy of .*|.* copy|camera\d*|dcim\d*|\d+_?(photos|videos)?)$")
+
+
+def is_generic(name: str) -> bool:
+    n = name.strip().lower()
+    return not n or n in _GENERIC or bool(_GENERIC_RE.match(n)) or n.startswith("whatsapp")
+
+
+def collection_of(relpath: str) -> str | None:
+    """'College/Sem 5/DCIM/IMG_1.MOV' -> 'College / Sem 5'."""
+    parts = [p for p in relpath.replace("\\", "/").split("/")[:-1] if not is_generic(p)]
+    return " / ".join(parts) or None
+
+
+def backfill_collections(conn) -> None:
+    rows = conn.execute("SELECT id, relpath FROM media WHERE collection IS NULL").fetchall()
+    for r in rows:
+        c = collection_of(r["relpath"])
+        if c:
+            conn.execute("UPDATE media SET collection=? WHERE id=?", (c, r["id"]))
+
+
+def all_collections(conn) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT collection AS name, count(*) AS items, min(taken_at) AS first, max(taken_at) AS last "
+        "FROM media WHERE collection IS NOT NULL GROUP BY collection ORDER BY first")]

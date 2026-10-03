@@ -34,6 +34,8 @@ PRICES = {
 SHOT_TYPES = ["extreme_close_up", "close_up", "medium", "wide", "selfie", "pov", "over_shoulder",
               "top_down", "screen_recording", "other"]
 CAMERA_MOTION = ["static", "handheld", "pan", "tilt", "tracking", "walking", "driving_riding", "zoom", "other"]
+ROLES = ["hook", "cinematic", "spectacle", "story_to_camera", "funny", "emotional", "establishing", "transition",
+         "food", "friends", "action", "calm", "work"]
 QUALITY = ["shaky", "blurry", "dark", "overexposed", "noisy_audio", "obstructed", "low_resolution", "vertical_letterbox"]
 
 _MOMENT_PROPS = {
@@ -47,6 +49,14 @@ _MOMENT_PROPS = {
     "content_uses": {"type": "array", "items": {"type": "string"},
                      "description": "Themes this could illustrate, e.g. 'founder grind', 'college nostalgia', 'Bangalore life'."},
     "tags": {"type": "array", "items": {"type": "string"}, "description": "5-12 lowercase search keywords (objects, places, activities)."},
+    "content_roles": {"type": "array", "items": {"type": "string", "enum": ROLES},
+                      "description": "What this moment is good for in a reel (0-4 roles, see instructions)."},
+    "hook_score": {"type": "integer", "description": "1-5: how strongly this would stop someone scrolling in the "
+                                                    "first 2 seconds of a reel (funny, weird, shocking, spectacular)."},
+    "story_seed": {"type": "string", "description": "If something story-worthy happens or is told here, one sentence "
+                                                    "a creator could build a reel on; otherwise empty."},
+    "motion": {"type": "integer", "description": "1-5 visual motion/pace: 1 still, 3 normal movement, 5 very fast "
+                                                "(running, riding, dancing, whip pans). Used to match music tempo."},
 }
 
 VIDEO_SCHEMA = {
@@ -114,7 +124,18 @@ longer moment. Use timestamps from the tiles; start/end are seconds from the sta
 Be concrete and searchable: name objects, places, activities, time of day, weather, clothing, \
 vehicles, screens (what app or content is visible), text on signs. Do not guess anyone's name or \
 identity; describe people by appearance and role ("a young man in a black hoodie", "a group of \
-friends"). Translate speech gists into English. Judge B-roll quality honestly."""
+friends"). Translate speech gists into English. Judge B-roll quality honestly.
+
+Content roles (pick the ones that really fit, can be none):
+- hook: funny, weird, shocking, surprising or crazy - would stop a scroll in the first 2 seconds
+- cinematic: beautiful, stable, nice light or composition (sunsets, wide landscapes, slow walks)
+- spectacle: something big or rare happening (fire show, festival, concert, cliff jump, storm)
+- story_to_camera: the person filming talks to the camera / tells what happened (selfie vlog)
+- funny, emotional, friends, food, action, calm, work (laptop/desk/notebook/meetings)
+- establishing: shows where we are (arrival, city view, airport, signboard, hotel)
+- transition: movement that bridges scenes (walking, plane window, vehicle POV, door, sky)
+Story seeds: note anything a creator could tell a story about - an incident, a mishap, a scam,
+a celebration, a conversation, a decision - especially when someone explains it to the camera."""
 
 
 # ------------------------------------------------------------------ request building
@@ -287,14 +308,24 @@ def store_result(cfg: Config, conn, req, data: dict) -> None:
 
 
 def _insert_moment(conn, mid, start, end, mo, allow_zero=False):
+    def score(key, default=None):
+        v = mo.get(key)
+        try:
+            return max(1, min(5, int(v))) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    roles = [r for r in (mo.get("content_roles") or []) if r in ROLES]
     conn.execute(
         """INSERT INTO moments (media_id, start, end, description, action, setting, shot_type, camera_motion,
-           people_count, mood, energy, quality_issues, broll_score, content_uses, tags, speech_en)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           people_count, mood, energy, quality_issues, broll_score, content_uses, tags, speech_en,
+           roles, hook_score, story_seed, motion)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (mid, start, end, mo.get("description"), mo.get("action"), mo.get("setting"), mo.get("shot_type"),
          mo.get("camera_motion"), mo.get("people_count"), mo.get("mood"), mo.get("energy"),
-         _clean_list(mo.get("quality_issues")), max(1, min(5, int(mo.get("broll_score") or 1))),
-         _clean_list(mo.get("content_uses")), _clean_list(mo.get("tags")), mo.get("speech_en") or ""),
+         _clean_list(mo.get("quality_issues")), score("broll_score", 1),
+         _clean_list(mo.get("content_uses")), _clean_list(mo.get("tags")), mo.get("speech_en") or "",
+         _clean_list(roles), score("hook_score", 1), (mo.get("story_seed") or "").strip(), score("motion", 3)),
     )
 
 

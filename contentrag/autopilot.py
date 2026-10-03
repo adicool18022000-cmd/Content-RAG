@@ -248,6 +248,18 @@ class Autopilot:
                 break
             if self.stop.is_set():
                 break
+            # 2b. face grouping (local, free); never fatal - it only powers the people hide list
+            if cfg.faces_enabled:
+                self.phase("faces", conn)
+                try:
+                    from .faces import find_faces, refine_hidden
+
+                    find_faces(cfg, conn, log=self.log, stop=self.stop)
+                    refine_hidden(cfg, conn, log=self.log, stop=self.stop)
+                except (Exception, SystemExit) as e:
+                    self.log(f"[autopilot] face grouping skipped: {e}")
+                if self.stop.is_set():
+                    break
             # 3. optional local transcription
             if cfg.transcribe_enabled:
                 from .transcribe import transcribe
