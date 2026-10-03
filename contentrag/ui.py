@@ -25,7 +25,7 @@ from .db import connect, failures
 from .util import source_path
 
 HTML = Path(__file__).with_name("ui.html")
-STEPS = ("scan", "prep", "faces", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
+STEPS = ("hide_person", "scan", "prep", "faces", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
 
 
 class Job:
@@ -98,6 +98,10 @@ class Job:
             from .prep import prep
 
             return prep(cfg, conn, log=log, stop=self.stop)
+        if s == "hide_person":
+            from .faces import hide_people
+
+            return hide_people(cfg, conn, self.params["person"], log=log)
         if s == "faces":
             from .faces import find_faces, refine_hidden
 
@@ -279,6 +283,17 @@ def make_handler(cfg: Config, job: Job):
                     return self._json({"models": gemini.list_models(cfg), "configured": cfg.gemini_model})
                 if url.path == "/api/search":
                     return self._search(qs)
+                if url.path == "/api/people":
+                    from .faces import list_people
+
+                    conn = connect(cfg.db_path)
+                    try:
+                        people = list_people(conn, int(qs.get("min", 3)))[:int(qs.get("limit", 60))]
+                    finally:
+                        conn.close()
+                    for p in people:
+                        p["sample_url"] = f"/api/thumb?p={p['sample']}" if p["sample"] else None
+                    return self._json({"people": people})
                 if url.path == "/api/thumb":
                     p = (library / qs.get("p", "")).resolve()
                     if library not in p.parents or not p.is_file():
@@ -325,6 +340,33 @@ def make_handler(cfg: Config, job: Job):
                     job.params = {"ids": ids, "name": str(body.get("name") or "selects")[:60]}
                 ok, msg = job.start(step)
                 return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
+            if url.path == "/api/people":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                pid = int(body.get("id", 0))
+                if body.get("name"):
+                    from .faces import name_person
+
+                    conn = connect(cfg.db_path)
+                    try:
+                        kept = name_person(conn, pid, str(body["name"])[:60])
+                    finally:
+                        conn.close()
+                    return self._json({"ok": True, "id": kept})
+                if "hide" in body:
+                    if body["hide"]:
+                        job.params = {"person": str(pid)}
+                        ok, msg = job.start("hide_person")
+                        return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
+                    from .usage import unhide
+
+                    conn = connect(cfg.db_path)
+                    try:
+                        unhide(conn, "person", str(pid))
+                    finally:
+                        conn.close()
+                    return self._json({"ok": True})
+                return self._json({"error": "nothing to do"}, 400)
             if url.path == "/api/stop":
                 from .autopilot import read_state, stop_file
 
@@ -344,6 +386,8 @@ def make_handler(cfg: Config, job: Job):
                 date_from=qs.get("from") or None, date_to=qs.get("to") or None,
                 place=qs.get("place") or None, root_kind=qs.get("root") or None, kind=qs.get("kind") or None,
                 exclude_issues=tuple(x for x in (qs.get("exclude") or "").split(",") if x),
+                collection=qs.get("collection") or None, roles=tuple(x for x in [qs.get("role")] if x),
+                fresh=qs.get("fresh") == "1",
             )
             conn = connect(cfg.db_path)
             try:

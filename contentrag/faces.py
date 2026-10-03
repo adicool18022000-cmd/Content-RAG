@@ -177,7 +177,8 @@ def list_people(conn, min_faces: int = 3) -> list[dict]:
     return [dict(r) | {"clips": r["clips"]} for r in conn.execute(
         "SELECT p.id, p.name, p.hidden, p.faces, p.sample, "
         "(SELECT count(DISTINCT media_id) FROM faces f WHERE f.person_id=p.id) AS clips "
-        "FROM people p WHERE p.faces >= ? ORDER BY p.hidden DESC, p.faces DESC", (min_faces,))]
+        "FROM people p WHERE p.faces >= ? OR p.hidden=1 OR p.name IS NOT NULL "
+        "ORDER BY p.hidden DESC, (p.name IS NULL), p.faces DESC", (min_faces,))]
 
 
 def resolve_people(conn, ref: str) -> list[int]:

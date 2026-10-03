@@ -150,28 +150,109 @@ crag search "sunset" --place Goa --exclude shaky --json
 
 `--html` writes a contact sheet of thumbnails with in/out times and file paths.
 
-## From script to edit
+## Collections, usage and privacy
+
+- **Collections:** your folder names ("Thailand Trip", "Summer Stay Hostel", "Sem 5") become
+  collections. Generic folders like DCIM, WhatsApp or 2023 are ignored. Search with
+  `crag search ... --collection thailand`. In the brain, each collection gets a note:
+  - what happened, and its story seeds
+  - the best clips by role (hooks, cinematic, spectacle, told to camera, funny, emotional,
+    establishing, transitions, food, friends)
+  - ready-made reel recipes, and which clips have been used already
+- **Every moment is tagged** with roles, a hook score (H1–H5), a story seed and a motion level
+  (for matching music).
+- **Usage:** every export records which part of which clip went into which reel. Search shows
+  `used×N` and ranks fresh footage first; `--fresh` hides anything already used. Using a
+  different part of the same clip (`m12:3-7`) is fine.
+- **Hide list:** `crag hide moment|media|collection <ref>`. Hidden items never appear in search,
+  the brain, exports or edits.
+- **People:** `crag faces` groups faces on your Mac; nothing is uploaded.
+  - `crag people` lists the groups.
+  - `crag people name 7 Riya` names a group; giving two groups the same name merges them.
+  - `crag people hide Riya` hides that person everywhere.
+  - Their clips are rechecked second by second, and only the parts where they appear are
+    removed. The rest of those clips stays usable.
+  - The dashboard has a People panel for all of this.
+
+## Tidy the footage folders
 
 ```bash
-crag search "late night laptop work" --vertical --min-broll 4 --json   # moment ids look like m1234
-crag pull m1234 m88 m512 --name founder-reel
+crag organize plan     # nothing moves; opens a review page (library/organize/plan-*.html)
+crag organize apply    # moves exactly as planned
+crag organize undo     # puts everything back
 ```
+- Duplicates go to `_Duplicates/`.
+- Everything else goes into `Year/<YYYY-MM> <your folder name>/`.
+- Big mixed folders (phone dumps) are split by trip: `2025/2025-11-14 Phuket - Fire show night/`.
+- Files only move within the same drive and nothing is ever deleted. iPhone sidecar files
+  (`.AAE`) travel with their videos, and the index follows, so nothing is analysed again.
 
-`library_dir/exports/founder-reel/` then contains:
-- the moments cut from the originals at full quality, with 0.5 s handles
-- `selects.json`, which records the order, in/out points and descriptions, for Claude or HyperFrames
-- `timeline.xml`. Use File → Import in Premiere Pro to get a sequence with the clips in order.
+## Making reels
 
-On the dashboard you can tick search results and click **Export selected clips** to do the same.
+### Talking head + B-roll
+```bash
+crag edit talking ~/Desktop/take3.mp4 --name thailand-scam --style page1 --page page1 \
+     [--collection thailand] [--music song] [--notes "what it's about"]
+```
+1. Cuts pauses and filler words from your take.
+2. Transcribes it (Hindi/Hinglish).
+3. Opens with a hook clip from your library.
+4. Adds B-roll for each line: fresh, privacy-safe and matched by meaning.
+5. Shows the hook moment again in full at the payoff line.
+6. Adds Hinglish captions with highlighted words, plus light leaks and sound effects from your
+   assets folder.
+
+Results go to `library/exports/<name>/`:
+
+| File | Use |
+|---|---|
+| `preview.mp4` | Watch it right away |
+| `premiere/timeline.xml` + `captions.srt` | Premiere Pro: File → Import. V1 talk, V2 B-roll, V3 leaks. Uses your originals, so every cut can still be trimmed |
+| `aftereffects/build_comp.jsx` | After Effects: File → Scripts → Run Script File. Builds the comp with editable caption layers |
+| `hyperframes/` | `npx hyperframes preview` / `render` |
+| `remotion/` | `npm i && npm run studio` / `npm run render` |
+| `plan.json` + `EDIT.md` | The timeline. Change it (or ask Claude to), then `crag edit render <name>` |
+
+### Music montage
+```bash
+crag music analyse ~/Music/song.mp3 --name song     # BPM, beats, calm/build/peak sections, drops
+crag edit beat song --name goa-montage --collection goa --start 30 --end 60
+```
+Cuts land on the beats. Calm parts get slower cuts with calm footage; drops get fast cuts with
+high-motion footage. A riser plays into each drop and a leak marks each section change.
+
+### Styles (one or more per Instagram page)
+```bash
+crag style learn page1 ref1.mp4 ref2.mp4 --page page1   # from example reels you like
+crag style list ; crag style show page1                 # tweak library/styles/page1.json
+```
+A style covers: pace, caption look, colour grade, transition type, which sound effects to use
+and where, and the hook structure.
+
+### Assets
+Your light leaks, sound effects, LUTs and fonts go in `library/assets/` (`crag assets` shows
+the folders):
+- `light_leaks/`
+- `sfx/riser/`, `sfx/shutter/`, `sfx/whoosh/`, `sfx/impact/`, `sfx/pop/`
+- `luts/`
+- `fonts/`
+
+If a folder is empty, that effect is simply skipped.
+
+### Experiments
+After posting, run `crag videos --posted thailand-scam --views 12000 --saves 340 --retention 41`.
+Then `crag videos --by-style` (and the brain's `Videos.md`) show which styles work best on each
+page.
 
 ## Using it with Claude Code
 
-Open Claude Code in this repo on your Mac. Three skills are included:
+Open Claude Code in this repo on your Mac. Four skills are included:
 
 - **find-clips**: "find me clips of the Nandi Hills ride, vertical"
-- **broll-plan**: paste a script. Claude plans each beat with your own footage, pulls the clips
-  and prepares the edit (HyperFrames, or a Premiere timeline), plus a shoot list for beats with
-  nothing usable
+- **broll-plan**: give your talking-head take (or a song) and Claude builds the edit with the
+  commands above, reviews the preview, improves the plan and re-renders
+- **content-ideas**: no idea what to post? Claude goes through the story seeds, collections,
+  unused footage and past results and proposes reels
 - **life-interview**: Claude walks through your timeline era by era, asks you what really
   happened, and writes Eras/People/Stories notes
 
@@ -184,5 +265,6 @@ and Claude and is never overwritten.
 
 ## Not built yet
 
-- Face grouping (name a person once, find them everywhere).
 - Gemini Batch API (another 50% off, but results arrive hours later).
+- Automatic colour grade in the Premiere / After Effects exports (the MP4, HyperFrames and Remotion
+  outputs apply it; in Premiere/AE apply your LUT or preset).

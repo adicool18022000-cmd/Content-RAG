@@ -270,9 +270,13 @@ def cmd_collections(args):
 
 
 def cmd_videos(args):
-    from .usage import set_posted, videos
+    from .usage import by_style, set_posted, videos
 
     cfg, conn = _open(args)
+    if args.by_style:
+        for r in by_style(conn):
+            print("  ".join(f"{k}={v}" for k, v in r.items()))
+        return
     if args.posted:
         metrics = {k: v for k, v in (("views", args.views), ("likes", args.likes), ("saves", args.saves),
                                      ("shares", args.shares), ("comments", args.comments),
@@ -446,6 +450,7 @@ def main(argv=None):
         sp.add_argument(f"--{flag}", type=int)
     sp.add_argument("--retention", type=float, help="average watch percentage")
     sp.add_argument("--notes")
+    sp.add_argument("--by-style", action="store_true", help="average results per editing style")
     sp.set_defaults(fn=cmd_videos)
 
     sp = sub.add_parser("autopilot", help="run everything unattended until done (overnight)")

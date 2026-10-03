@@ -133,3 +133,22 @@ def safe_parts(start: float, end: float, hidden: list[tuple[float, float]],
     if cur < end:
         parts.append((cur, end))
     return [(round(s, 2), round(e, 2)) for s, e in parts if e - s >= min_len]
+
+
+METRICS = ("views", "likes", "saves", "shares", "comments", "avg_watch_pct")
+
+
+def by_style(conn) -> list[dict]:
+    """Average results of posted videos per style (and page) - which editing styles work."""
+    groups: dict[tuple, list[dict]] = {}
+    for v in conn.execute("SELECT style, page, metrics FROM videos WHERE status='posted'"):
+        groups.setdefault((v["style"] or "-", v["page"] or "-"), []).append(json.loads(v["metrics"] or "{}"))
+    out = []
+    for (style, page), ms in sorted(groups.items()):
+        row = {"style": style, "page": page, "videos": len(ms)}
+        for k in METRICS:
+            vals = [m[k] for m in ms if isinstance(m.get(k), (int, float))]
+            if vals:
+                row[f"avg_{k}"] = round(sum(vals) / len(vals), 1)
+        out.append(row)
+    return out

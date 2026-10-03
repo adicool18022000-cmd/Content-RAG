@@ -19,4 +19,12 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   `library_dir/autopilot.json`. Errors that aren't the file's fault (429, network, bad key,
   unplugged drive) must leave requests `pending` without using an attempt.
 - `crag pull m<id> ...` (`contentrag/pull.py`) cuts moments + `selects.json` + FCP7 `timeline.xml`.
-- Never write inside the footage roots; everything generated goes under `library_dir`.
+- Collections = the creator's folder names (`collections.py`); usage + hide list (`usage.py`);
+  local face grouping with OpenCV YuNet/SFace (`faces.py`), hidden people are removed by time
+  range, never by dropping whole clips.
+- Edit engine (`contentrag/edit/`): one `EditPlan` (plan.py) built by `talking.py` / `beat.py`,
+  rendered by `render.py` (ffmpeg MP4) and `export.py` (Premiere FCP7 XML, AE JSX, HyperFrames,
+  Remotion 4.0.532). Styles + assets in `style.py`. Song analysis in `music.py`.
+- Footage roots are read-only for everything except `crag organize apply/undo` (explicit
+  plan -> review -> apply; moves within a drive only, never deletes). Everything else that is
+  generated goes under `library_dir`.

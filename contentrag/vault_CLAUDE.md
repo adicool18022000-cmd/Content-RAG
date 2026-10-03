@@ -8,17 +8,24 @@ life, and to find footage.
 
 ## Find your way (read in this order)
 
-1. `_generated/Index.md`: the map: totals, years, places, themes, and how to pull clips.
-2. `Me.md`: who the creator is now, content pillars.
+1. `_generated/Index.md`: the map: totals, collections, years, places, themes, how to pull clips.
+2. `Me.md`: who the creator is now, content pillars, pages.
 3. `Eras/` + `Stories/`: the meaning behind the footage (written with the creator).
-4. `_generated/Themes/<theme>.md`: best moments per content theme, best B-roll first.
-5. `_generated/Years/<year>.md` → `_generated/Events/<year>/…`: what happened when, every
+4. `_generated/Collections/<folder>.md`: per trip/period (the creator's own folder names): story
+   seeds, best hooks, cinematic, spectacle, told-to-camera, funny, emotional, establishing,
+   transitions, reel recipes, what's already used.
+5. `_generated/Ideas.md`: every story seed + unused strong moments. `_generated/Videos.md`: reels
+   made so far, styles, results. `_generated/People.md`: face groups (hidden people never appear).
+6. `_generated/Themes/<theme>.md`: best moments per content theme, best B-roll first.
+7. `_generated/Years/<year>.md` → `_generated/Events/<year>/…`: what happened when, every
    moment with its id.
-6. `_generated/Places/<city>.md`: everything shot in one city.
+8. `_generated/Places/<city>.md`: everything shot in one city. `Styles/`: editing styles per page.
+   `Music/`: analysed songs (tempo, sections, drops).
 
 Every moment appears as one line:
 `` - `m1234` 0:12–0:18 · vertical · B4 · description — “speech gist” · [[event]] ``
-`m1234` is the moment id used by `crag pull`; `B4` is B-roll quality (1–5).
+`m1234` is the moment id used by `crag pull`; `B4` is B-roll quality (1–5), `H4` hook strength,
+`used×2` how many reels already used it (prefer fresh footage; reusing a different part is fine).
 
 ## Layout
 
@@ -49,25 +56,21 @@ Every moment appears as one line:
 - Use frontmatter properties (Obsidian Bases reads them); keep `type:` on every note.
 - People who appear in footage have not necessarily agreed to be in public content. Mark
   `consent: unknown | yes | no` on People notes; don't propose footage of `no`/`unknown`
-  people for public posts without flagging it.
+  people for public posts without flagging it. Anyone the creator hides
+  (`crag people hide <name>`, `crag hide ...`) must never be suggested or re-added by hand.
 - Speech in the footage is mostly Hindi/Hinglish. Quote the English gist; keep original
   Hindi only when the exact words matter.
 
-## Making a video from a script
+## Making a video
 
-1. Understand the story: `Me.md`, the matching Era/Story notes. Never invent facts.
-2. Split the script into beats (1.5–4 s each for a Reel). For each beat decide what should be
-   on screen.
-3. Find candidates: the matching `Themes/` page first, then Events of the right period, then
-   `crag search "<what's on screen>" --vertical --min-broll 3 --json` (add `--from/--to`,
-   `--place`, `--root brand`). Prefer vertical, B-roll ≥ 4, no quality issues; vary shot types;
-   don't reuse a moment.
-4. Show the creator the plan (beat → `m<id>`, why) and fix it with them.
-5. `crag pull m12 m48 m7 ... --name <reel-name>` cuts the moments from the originals into
-   `library/exports/<reel-name>/`: numbered clips, `selects.json` (order, in/out, description)
-   and `timeline.xml` (File → Import in Premiere Pro gives the sequence).
-6. Edit: hand the clips + `selects.json` to HyperFrames/ffmpeg, or open `timeline.xml` in
-   Premiere. List beats with no good footage as a shoot list for the brand B-roll folder.
+- Talking head: `crag edit talking <recording> --name <reel> --style <style> --page <page>
+  [--collection <trip>] [--notes "..."]` → `library/exports/<reel>/` with preview.mp4, Premiere
+  XML + SRT, After Effects JSX, HyperFrames and Remotion projects, `plan.json`, `EDIT.md`.
+  Improve `plan.json` (better B-roll, timing, captions), then `crag edit render "<reel>"`.
+- Music montage: `crag music analyse <song>` then `crag edit beat <song> --name <reel> --collection ...`.
+- Styles: `crag style list`; new ones from example reels: `crag style learn <name> refs... --page <page>`.
+- Story first: `Me.md`, the matching Era/Story/Collection notes. Never invent facts.
+- After posting: `crag videos --posted "<reel>" --views ... --saves ...` (feeds `Videos.md`).
 
 ## Operations
 

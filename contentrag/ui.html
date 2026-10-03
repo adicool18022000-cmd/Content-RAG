@@ -87,6 +87,13 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
     </section>
 
     <section>
+      <h2>People</h2>
+      <div class="note" style="margin-top:0">Faces found on this Mac. Name a group (same name = same person). "Hide" keeps
+        that person out of every search, export and edit; the rest of those clips stays usable.</div>
+      <div id="people" style="display:grid;gap:6px;margin-top:8px"></div>
+    </section>
+
+    <section>
       <h2>Library</h2>
       <div id="counts"></div>
     </section>
@@ -129,6 +136,12 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
         <select id="kind"><option value="">videos + photos</option><option value="video">videos</option><option value="photo">photos</option></select>
         from <input id="from" placeholder="2021" size="7"> to <input id="to" placeholder="2023-06" size="7">
         <label><input type="checkbox" id="noshaky"> no shaky/blurry</label>
+        <input id="collection" placeholder="collection (e.g. thailand)" size="18">
+        <select id="role"><option value="">any role</option><option>hook</option><option>cinematic</option>
+          <option>spectacle</option><option value="story_to_camera">told to camera</option><option>funny</option>
+          <option>emotional</option><option>friends</option><option>establishing</option><option>transition</option>
+          <option>action</option><option>food</option><option>calm</option><option>work</option></select>
+        <label><input type="checkbox" id="fresh"> unused only</label>
       </div>
       <div id="selbar" style="display:none;margin-top:10px;gap:8px;align-items:center">
         <b id="selcount"></b> <button class="primary" id="export">Export selected clips</button>
@@ -159,6 +172,7 @@ const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type"
 const STEP_INFO = [
   ["scan", "Scan drives", "Find files, remove duplicates, read date / GPS"],
   ["prep", "Prepare", "Thumbnails and scene cuts (local, ffmpeg)"],
+  ["faces", "Group faces", "Find people in the footage (local, private)"],
   ["transcribe", "Transcribe", "Whisper on your Mac (optional with Gemini)"],
   ["describe", "Analyse with AI", "Gemini watches each clip and writes moments"],
   ["retry", "Retry failed", "Send failed or blocked requests again"],
@@ -260,7 +274,8 @@ $("checkKey").onclick = async () => {
 $("sf").onsubmit = async (e) => {
   e.preventDefault();
   const p = new URLSearchParams({q: $("q").value, limit: 60});
-  for (const k of ["orientation", "min_broll", "root", "kind", "from", "to"]) if ($(k).value) p.set(k, $(k).value);
+  for (const k of ["orientation", "min_broll", "root", "kind", "from", "to", "collection", "role"]) if ($(k).value) p.set(k, $(k).value);
+  if ($("fresh").checked) p.set("fresh", "1");
   if ($("noshaky").checked) p.set("exclude", "shaky,blurry");
   $("results").innerHTML = `<div class="empty">searching…</div>`;
   const j = await (await fetch("/api/search?" + p)).json();
@@ -271,7 +286,9 @@ $("sf").onsubmit = async (e) => {
     <div class="card" data-i="${i}">
       ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy" alt="">` : ""}
       <div class="b"><label onclick="event.stopPropagation()" style="float:right"><input type="checkbox" class="sel" data-id="${r.moment_id}" ${selected.has(r.moment_id) ? "checked" : ""}> pick</label>
-      <span class="chip">m${r.moment_id}</span> <b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span><span class="chip">${esc(r.orientation || "")}</span>
+      <span class="chip">m${r.moment_id}</span> <b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span>${r.hook_score >= 3 ? `<span class="chip">hook ${r.hook_score}</span>` : ""}<span class="chip">${esc(r.orientation || "")}</span>${r.uses ? `<span class="chip" title="${esc(r.used_in.join(", "))}">used ×${r.uses}</span>` : ""}${r.trimmed_for_privacy ? `<span class="chip" title="part with a hidden person removed">trimmed</span>` : ""}
+      <div class="t">${esc((r.roles || []).join(" · "))}${r.collection ? " · " + esc(r.collection) : ""}</div>
+      ${r.story_seed ? `<div class="t">💡 ${esc(r.story_seed)}</div>` : ""}
       <div>${esc(r.description)}</div><div class="t">${esc((r.taken_at || "").slice(0, 10))} ${esc(r.place || "")}</div></div>
     </div>`).join("");
 };
@@ -314,7 +331,33 @@ $("results").addEventListener("click", (e) => {
 });
 $("player").addEventListener("close", () => $("video").pause());
 
+async function loadPeople() {
+  const j = await (await fetch("/api/people?limit=40")).json();
+  const el = $("people");
+  if (!j.people || !j.people.length) { el.innerHTML = `<div class="note">None yet — run "Group faces".</div>`; return; }
+  el.innerHTML = j.people.map(p => `<div style="display:flex;gap:8px;align-items:center">
+      ${p.sample_url ? `<img src="${p.sample_url}" style="width:44px;height:44px;border-radius:50%;object-fit:cover">` : ""}
+      <input data-pid="${p.id}" class="pname" value="${esc(p.name || "")}" placeholder="#${p.id} name" style="flex:1;min-width:0">
+      <span class="chip">${p.clips} clips</span>
+      <button data-hide="${p.id}" data-on="${p.hidden ? 0 : 1}">${p.hidden ? "Unhide" : "Hide"}</button></div>`).join("");
+}
+$("people").addEventListener("change", async (e) => {
+  if (!e.target.classList.contains("pname") || !e.target.value.trim()) return;
+  await post("/api/people", {id: +e.target.dataset.pid, name: e.target.value.trim()});
+  loadPeople();
+});
+$("people").addEventListener("click", async (e) => {
+  const id = e.target.dataset.hide;
+  if (!id) return;
+  const on = e.target.dataset.on === "1";
+  if (on && !confirm("Hide this person everywhere? Their clips are rechecked second by second (can take a while).")) return;
+  const r = await (await post("/api/people", {id: +id, hide: on})).json();
+  if (r.ok === false) alert(r.message || r.error);
+  setTimeout(loadPeople, 500);
+});
+
 refresh();
+loadPeople();
 setInterval(pollLog, 1500);
 setInterval(refresh, 5000);
 </script>

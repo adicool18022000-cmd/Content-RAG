@@ -133,6 +133,7 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
     collections = _write_collections(gen, media, moments_by_media, event_of, conn)
     _write_ideas(gen, media_by_id, moments_by_media, event_of, collections)
     _write_people(cfg, conn, vault, gen)
+    _write_videos(conn, gen)
     _write_timeline(gen, summaries)
     _write_index(gen, media, summaries, years, places, themes, len(broll), collections)
     _write_base(vault)
@@ -460,6 +461,27 @@ def _write_ideas(gen: Path, media_by_id: dict, moments_by_media: dict, event_of:
     (gen / "Ideas.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_videos(conn, gen: Path) -> None:
+    import json as _json
+
+    from .usage import by_style
+
+    rows = conn.execute("SELECT v.*, (SELECT count(*) FROM usage u WHERE u.video=v.name) AS clips FROM videos v "
+                        "ORDER BY created_at DESC").fetchall()
+    lines = ["# Videos", "", "*Every reel made from the library: style, page, clips used and results. "
+             "Record results with `crag videos --posted <name> --views ... --saves ...`.*", ""]
+    for v in rows:
+        m = _json.loads(v["metrics"] or "{}")
+        res = ", ".join(f"{k} {m[k]}" for k in ("views", "likes", "saves", "shares", "avg_watch_pct") if k in m)
+        lines.append(f"- **{v['name']}** · {v['status']} · {(v['created_at'] or '')[:10]} · page {v['page'] or '-'} · "
+                     f"style {v['style'] or '-'} · {v['clips']} clips" + (f" · {res}" if res else ""))
+    stats = by_style(conn)
+    if stats:
+        lines += ["", "## Which styles work (posted videos, averages)"]
+        lines += ["- " + " · ".join(f"{k} {val}" for k, val in r.items()) for r in stats]
+    (gen / "Videos.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _write_people(cfg: Config, conn, vault: Path, gen: Path) -> None:
     rows = conn.execute(
         "SELECT p.*, (SELECT count(DISTINCT media_id) FROM faces f WHERE f.person_id=p.id) AS clips "
@@ -495,6 +517,7 @@ def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str]
         *[f"- [[{_slug(c, 80)}]]" for c in (collections or [])],
         "- [[Ideas]]: story seeds and ready-made reel recipes from the whole library",
         "- [[People]]: face groups (named / hidden)",
+        "- [[Videos]]: reels made so far, their styles and results",
         "", "## Years", *[f"- [[{y}]]" for y in years],
         "", "## Places (most events first)", *[f"- [[{_slug(p)}]]" for p in places[:30]],
         "", "## Themes (best moments per content theme)", *[f"- [[{_slug(t)}]]" for t in themes],
