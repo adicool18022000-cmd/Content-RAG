@@ -166,6 +166,87 @@ def cmd_people(args):
                   f"{'HIDDEN ' if p['hidden'] else ''}{cfg.library_dir / p['sample'] if p['sample'] else ''}")
 
 
+def cmd_organize(args):
+    from . import organize
+
+    cfg, conn = _open(args)
+    if args.action == "plan":
+        print(json.dumps(organize.plan(cfg, conn), indent=2))
+    elif args.action == "apply":
+        p = organize.latest_plan(cfg)
+        n = len(json.loads(p.read_text())["moves"])
+        if not args.yes and input(f"Move {n} files as planned in {p.name}? Nothing is deleted. [y/N] ").lower() != "y":
+            return
+        print(json.dumps(organize.apply(cfg, conn, p), indent=2))
+    else:
+        print(json.dumps(organize.undo(cfg, conn), indent=2))
+
+
+def cmd_edit(args):
+    from pathlib import Path as _P
+
+    from .edit import run
+    from .search import Filters
+
+    cfg, conn = _open(args)
+    targets = run.parse_targets(args.export)
+    args.name = args.name or _P(args.source).stem
+    if args.mode == "talking":
+        out = run.make_talking(cfg, conn, _P(args.source).expanduser(), args.name, targets, style_name=args.style,
+                               page=args.page, music=args.music, collection=args.collection, notes=args.notes or "",
+                               use_vectors=not args.no_vectors)
+    elif args.mode == "beat":
+        f = Filters(kind="video", collection=args.collection, roles=tuple(args.role or ()), fresh=args.fresh)
+        out = run.make_beat(cfg, conn, args.source, args.name, targets, style_name=args.style, page=args.page,
+                            query=args.query or "", filters=f, start=args.start or 0.0, end=args.end,
+                            use_vectors=not args.no_vectors)
+    else:
+        out = run.rerender(cfg, conn, args.source, targets)
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def cmd_music(args):
+    from pathlib import Path as _P
+
+    from . import music
+
+    cfg = load_config(args.config)
+    if args.action == "analyse":
+        music.analyse(cfg, _P(args.file).expanduser(), args.name)
+    else:
+        for s in music.songs(cfg):
+            print(f"{s['name']:<30} {s['bpm']:>6} BPM  {s['duration']:6.1f}s  {s['file']}")
+
+
+def cmd_style(args):
+    from pathlib import Path as _P
+
+    from .edit import style
+
+    cfg = load_config(args.config)
+    if args.action == "learn":
+        if not args.references:
+            raise SystemExit("Give one or more example reels: crag style learn <name> a.mp4 b.mp4")
+        s = style.learn_style(cfg, args.name, [_P(p).expanduser() for p in args.references], page=args.page)
+        print(json.dumps({k: s[k] for k in ("name", "page", "description")}, ensure_ascii=False, indent=2))
+    elif args.action == "show":
+        print(json.dumps(style.load_style(cfg, args.name), ensure_ascii=False, indent=2))
+    elif args.action == "new":
+        s = style.load_style(cfg, None)
+        s.update(name=args.name, page=args.page, description=f"Copy of the default style for {args.page or args.name}")
+        print(f"created {style.save_style(cfg, s)} - edit it, or ask Claude to")
+    else:
+        for s in style.list_styles(cfg):
+            print(f"{s['name']:<24} page={s['page'] or '-':<14} {s['description'][:80]}")
+
+
+def cmd_assets(args):
+    from .edit.style import asset_report
+
+    cfg = load_config(args.config)
+    print(json.dumps(asset_report(cfg), indent=2))
+
+
 def cmd_hide(args):
     from .usage import hide, unhide
 
@@ -310,6 +391,45 @@ def main(argv=None):
     sp.add_argument("name", nargs="?", help="for 'name': the person's name (same name = same person)")
     sp.add_argument("--min-faces", type=int, default=3)
     sp.set_defaults(fn=cmd_people)
+
+    sp = sub.add_parser("edit", help="make an edit: talking head + B-roll, or a beat-synced montage")
+    sp.add_argument("mode", choices=["talking", "beat", "render"],
+                    help="talking <video> | beat <song name> | render <edit name> (after changing plan.json)")
+    sp.add_argument("source", help="talking-head file, analysed song name, or edit name")
+    sp.add_argument("--name", help="name of the reel (export folder)")
+    sp.add_argument("--style", help="style profile (crag style list)")
+    sp.add_argument("--page", help="Instagram page")
+    sp.add_argument("--music", help="analysed song to put under the voice")
+    sp.add_argument("--collection", help="prefer footage from this collection (e.g. thailand)")
+    sp.add_argument("--notes", help="extra context for the AI (what the video is about)")
+    sp.add_argument("--query", help="beat: what footage to use (search words)")
+    sp.add_argument("--role", action="append", help="beat: only these roles (cinematic, action, ...)")
+    sp.add_argument("--fresh", action="store_true", help="beat: only never-used footage")
+    sp.add_argument("--start", type=float, help="beat: start of the song part to use (s)")
+    sp.add_argument("--end", type=float, help="beat: end of the song part to use (s)")
+    sp.add_argument("--export", default="all", help="mp4,premiere,aftereffects,hyperframes,remotion (default all)")
+    sp.add_argument("--no-vectors", action="store_true")
+    sp.set_defaults(fn=cmd_edit)
+
+    sp = sub.add_parser("music", help="analyse a song (tempo, beats, sections) / list songs")
+    sp.add_argument("action", choices=["analyse", "list"])
+    sp.add_argument("file", nargs="?")
+    sp.add_argument("--name")
+    sp.set_defaults(fn=cmd_music)
+
+    sp = sub.add_parser("style", help="editing styles: learn from example reels, list, show, new")
+    sp.add_argument("action", choices=["learn", "list", "show", "new"])
+    sp.add_argument("name", nargs="?")
+    sp.add_argument("references", nargs="*", help="example reels (for learn)")
+    sp.add_argument("--page")
+    sp.set_defaults(fn=cmd_style)
+
+    sub.add_parser("assets", help="show the assets folder (light leaks, SFX, LUTs, fonts)").set_defaults(fn=cmd_assets)
+
+    sp = sub.add_parser("organize", help="tidy footage folders: plan -> review -> apply (undo possible)")
+    sp.add_argument("action", choices=["plan", "apply", "undo"])
+    sp.add_argument("-y", "--yes", action="store_true")
+    sp.set_defaults(fn=cmd_organize)
 
     sp = sub.add_parser("hide", help="never suggest a moment / clip / collection / person (privacy)")
     sp.add_argument("kind", choices=["moment", "media", "collection", "person"])

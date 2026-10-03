@@ -676,3 +676,145 @@ def test_collection_notes_and_ideas(env, monkeypatch):
     ideas = (cfg.vault_dir / "_generated" / "Ideas.md").read_text()
     assert "Tuk-tuk driver" in ideas and "Unused gems" in ideas
     assert "[[Thailand Trip]]" in (cfg.vault_dir / "_generated" / "Index.md").read_text()
+
+
+def test_organize_plan_apply_undo(env, monkeypatch):
+    from contentrag import organize
+
+    cfg, conn = _analysed(env, monkeypatch)
+    a = cfg.roots[0].path
+    _video(a / "Thailand Trip" / "fire.mov", "640x360", 3, {"creation_time": "2025-11-14T13:00:00Z"})
+    (a / "Thailand Trip" / "fire.AAE").write_text("edit sidecar")
+    scan(cfg, conn, log=lambda *_: None)
+    before = sorted(str(p.relative_to(a)) for p in a.rglob("*") if p.is_file())
+
+    res = organize.plan(cfg, conn, log=lambda *_: None)
+    assert res["duplicates"] == 1 and Path(res["review"]).exists()
+    moves = json.loads(Path(res["plan"]).read_text())["moves"]
+    dup = next(m for m in moves if m["reason"] == "duplicate")
+    assert dup["to"].startswith("_Duplicates/")
+    assert any(m["to"].startswith("2025/2025-11 Thailand Trip/") for m in moves)
+    assert all(not (a / m["to"]).exists() for m in moves)  # plan moves nothing
+
+    out = organize.apply(cfg, conn, log=lambda *_: None)
+    assert out["moved"] == len(moves) and out["skipped"] == 0
+    assert (a / "2025/2025-11 Thailand Trip/fire.mov").exists()
+    assert (a / "2025/2025-11 Thailand Trip/fire.AAE").exists()  # sidecar travelled along
+    assert not (a / "Thailand Trip").exists()  # emptied folder removed
+    # index follows the files: nothing to re-analyse, primary copy is not the duplicate
+    assert scan(cfg, conn, log=lambda *_: None)["new"] == 0
+    assert all(not r["file"].count("_Duplicates") for r in search(cfg, conn, "colour bars", use_vectors=False))
+    assert conn.execute("SELECT collection FROM media WHERE relpath LIKE '%fire.mov'").fetchone()[0] == "Thailand Trip"
+
+    organize.undo(cfg, conn, log=lambda *_: None)
+    after = sorted(str(p.relative_to(a)) for p in a.rglob("*") if p.is_file())
+    assert after == before
+
+
+# ---------------------------------------------------------------- edit engine
+
+def _assets(cfg):
+    from contentrag.edit.style import assets_dir
+
+    a = assets_dir(cfg)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=orange:s=640x360:d=1.5",
+                    "-vf", "fade=in:0:10,fade=out:30:15", str(a / "light_leaks" / "leak1.mp4")], check=True)
+    for kind, d in (("whoosh", 0.4), ("shutter", 0.2), ("impact", 0.5), ("riser", 1.2)):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"sine=f=600:d={d}",
+                        str(a / "sfx" / kind / f"{kind}.wav")], check=True)
+
+
+def test_talking_head_edit_all_exports(env, monkeypatch, tmp_path):
+    import shutil as sh
+    import xml.etree.ElementTree as ET
+
+    from contentrag.edit import run
+    from contentrag.edit.plan import EditPlan
+    from contentrag.edit.talking import Word
+
+    cfg, conn = _analysed(env, monkeypatch)
+    _assets(cfg)
+    aroll = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=720x1280:rate=30:duration=10",
+                    "-f", "lavfi", "-i", "aevalsrc='if(between(t,3,4.5),0,0.5*sin(2*PI*300*t))':d=10:s=48000",
+                    "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(aroll)], check=True)
+    words = [Word(0.2, 0.6, "Aaj"), Word(0.7, 1.0, "main"), Word(1.2, 1.5, "um"), Word(1.6, 2.4, "Thailand"),
+             Word(2.5, 2.9, "gaya."), Word(4.6, 5.0, "Wahan"), Word(5.1, 5.6, "fire"), Word(5.7, 6.2, "show"),
+             Word(6.3, 7.0, "dekha"), Word(7.1, 7.5, "aur"), Word(7.6, 8.4, "pagal"), Word(8.5, 9.6, "hogaya.")]
+    understanding = {"topic": "Thailand trip", "hook_query": "colour bars", "collection_hint": "", "payoff_line": 1,
+                     "lines": [{"index": 0, "english": "Today I went to Thailand.", "roman": "Aaj main Thailand gaya",
+                                "visual_query": "sunset beach", "wants_broll": True, "emphasis": ["Thailand"]},
+                               {"index": 1, "english": "There I saw a fire show and went crazy.",
+                                "roman": "Wahan fire show dekha aur pagal hogaya", "visual_query": "colour bars",
+                                "wants_broll": True, "emphasis": ["pagal"]}]}
+    out = run.make_talking(cfg, conn, aroll, "thailand reel", run.parse_targets("all"), words=words,
+                           understanding=understanding, use_vectors=False, log=lambda *_: None)
+    plan = EditPlan.load(Path(out["plan"]))
+    assert len(plan.track("aroll")) >= 2  # the 1.5 s pause was cut
+    assert sum(c.length for c in plan.track("aroll")) < 9.5
+    hook = [c for c in plan.clips if c.role == "hook"]
+    assert hook and hook[0].at == 0.0 and plan.track("aroll")[0].at == pytest.approx(hook[0].length, abs=0.01)
+    assert any(c.role == "payoff" for c in plan.clips)  # hook moment shown again at the payoff line
+    assert plan.track("overlay") and plan.sounds  # light leak + sfx from the assets folder
+    assert plan.captions and not any("UM" in c.text.split() for c in plan.captions)
+    assert any("PAGAL" in c.emphasis for c in plan.captions)
+    # MP4 preview has the planned length
+    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                out["mp4"]], capture_output=True, text=True).stdout)
+    assert abs(dur - plan.duration) < 0.25
+    # Premiere XML: 3 video tracks, talk on V1 referencing the original
+    root = ET.parse(out["premiere"]).getroot()
+    tracks = root.findall(".//video/track")
+    assert len(tracks) == 3 and tracks[0].find("clipitem/file/pathurl").text.endswith("talk.mp4")
+    assert (Path(out["folder"]) / "premiere" / "captions.srt").exists()
+    # After Effects script is valid JavaScript
+    if sh.which("node"):
+        js = tmp_path / "build_comp.js"
+        sh.copyfile(out["aftereffects"], js)
+        r = subprocess.run(["node", "--check", str(js)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    html = Path(out["hyperframes"]).read_text()
+    assert html.count('class="clip') >= len(plan.clips) and "data-composition-id" in html
+    assert (Path(out["remotion"]) / "src" / "Edit.tsx").exists()
+    # usage recorded
+    v = conn.execute("SELECT style FROM videos WHERE name='thailand reel'").fetchone()
+    assert v["style"] == "default"
+    assert conn.execute("SELECT count(*) FROM usage WHERE video='thailand reel'").fetchone()[0] >= 2
+    # re-render after editing the plan by hand
+    plan.captions = plan.captions[:1]
+    plan.save(Path(out["plan"]))
+    again = run.rerender(cfg, conn, "thailand reel", {"mp4"}, log=lambda *_: None)
+    assert again["captions"] == 1
+
+
+def test_beat_edit(env, monkeypatch, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from contentrag import music
+    from contentrag.edit import run
+    from contentrag.edit.plan import EditPlan
+
+    cfg, conn = _analysed(env, monkeypatch)
+    _assets(cfg)
+    sr, bpm, dur = 22050, 120, 12
+    y = np.zeros(sr * dur)
+    t = np.arange(int(0.05 * sr)) / sr
+    click = np.sin(2 * np.pi * 1000 * t) * np.exp(-t * 60)
+    for b in np.arange(0, dur, 60 / bpm):
+        s = int(b * sr)
+        y[s:s + len(click)] += (0.15 if b < 6 else 0.9) * click
+    sf.write(tmp_path / "song.wav", y, sr)
+    info = music.analyse(cfg, tmp_path / "song.wav", "test song", log=lambda *_: None)
+    assert abs(info.bpm - 120) < 2 and info.sections[0].kind == "calm" and info.sections[-1].kind == "peak"
+    out = run.make_beat(cfg, conn, "test song", "beat reel", {"mp4", "premiere"}, use_vectors=False,
+                        log=lambda *_: None)
+    plan = EditPlan.load(Path(out["plan"]))
+    cuts = [c.at for c in plan.track("broll")]
+    assert len(cuts) >= 6 and plan.track("broll")[0].role == "hook"
+    beats = info.beats
+    assert all(min(abs(c - b) for b in beats + [0.0]) < 0.06 for c in cuts)  # every cut lands on a beat
+    peak = [c for c in plan.track("broll") if c.at >= 6.5]
+    calm = [c for c in plan.track("broll") if c.at < 5.5]
+    assert max(c.length for c in peak) < min(c.length for c in calm)  # faster cutting in the loud part
+    assert Path(out["mp4"]).exists()

@@ -71,8 +71,8 @@ def reframe_filter(mode: str | None, width: int = 1080, height: int = 1920) -> s
 
 
 def cut_clip(src: Path, start: float, end: float, out: Path, reframe: str | None = None,
-             fps: int | None = None, audio: bool = True) -> tuple[bool, str]:
-    vf = reframe_filter(reframe)
+             fps: int | None = None, audio: bool = True, width: int = 1080, height: int = 1920) -> tuple[bool, str]:
+    vf = reframe_filter(reframe, width, height)
     if fps:
         vf = f"{vf},fps={fps}" if vf else f"fps={fps}"
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src),

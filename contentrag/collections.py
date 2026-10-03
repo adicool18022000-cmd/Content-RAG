@@ -26,9 +26,19 @@ def is_generic(name: str) -> bool:
     return not n or n in _GENERIC or bool(_GENERIC_RE.match(n)) or n.startswith("whatsapp")
 
 
+_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2})?\s+")
+
+
 def collection_of(relpath: str) -> str | None:
-    """'College/Sem 5/DCIM/IMG_1.MOV' -> 'College / Sem 5'."""
-    parts = [p for p in relpath.replace("\\", "/").split("/")[:-1] if not is_generic(p)]
+    """'College/Sem 5/DCIM/IMG_1.MOV' -> 'College / Sem 5'.
+    Organised folders ('2025/2025-11 Thailand Trip/x.mov') give 'Thailand Trip'."""
+    parts = []
+    for p in relpath.replace("\\", "/").split("/")[:-1]:
+        if p == "_Duplicates":
+            continue
+        p = _DATE_PREFIX.sub("", p)
+        if not is_generic(p):
+            parts.append(p)
     return " / ".join(parts) or None
 
 

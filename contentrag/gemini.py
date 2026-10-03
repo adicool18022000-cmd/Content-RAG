@@ -522,3 +522,51 @@ def _store(cfg: Config, conn, spec: dict, data: dict) -> None:
             conn.executemany("INSERT INTO transcript VALUES (?,?,?,?)",
                              [(spec["media_id"], s["start"], s["end"], s["text"].strip()) for s in segs])
     store_result(cfg, conn, req, data)
+
+
+# ------------------------------------------------------------------ one-off helpers (styles, edit planning)
+
+def ask_json(cfg: Config, contents: list, schema: dict, system: str | None = None) -> dict:
+    """One Gemini call that must return JSON matching `schema`. Raises GeminiError on failure."""
+    from google.genai import types
+
+    gclient = client(cfg)
+    config = types.GenerateContentConfig(
+        system_instruction=system, response_mime_type="application/json", response_json_schema=schema,
+        media_resolution=f"MEDIA_RESOLUTION_{cfg.gemini_resolution.upper()}",
+        thinking_config=types.ThinkingConfig(thinking_level=cfg.gemini_thinking.upper()),
+        max_output_tokens=65536)
+    delay = 5.0
+    for attempt in range(5):
+        try:
+            resp = gclient.models.generate_content(model=cfg.gemini_model, contents=contents, config=config)
+            return json.loads(resp.text or "{}")
+        except json.JSONDecodeError as e:
+            raise GeminiError(f"Gemini returned invalid JSON: {e}")
+        except Exception as e:  # noqa: BLE001 - mapped to a readable error below
+            from google.genai import errors
+
+            if isinstance(e, errors.APIError) and getattr(e, "code", None) in (429, 500, 502, 503, 504) and attempt < 4:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            if isinstance(e, errors.APIError):
+                raise _explain(e) from e
+            raise
+    raise GeminiError("Gemini kept failing")
+
+
+def video_part(cfg: Config, path: Path, tmp: Path, max_seconds: float = 180, keep_audio: bool = True):
+    """A Gemini content part for (the first max_seconds of) a video, as a small proxy."""
+    from google.genai import types
+
+    info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                          capture_output=True, text=True)
+    duration = float(info.stdout.strip() or 0) or max_seconds
+    proxy = make_proxy(path, 0.0, min(duration, max_seconds), tmp / f"{path.stem}-proxy.mp4", keep_audio)
+    if proxy.stat().st_size <= INLINE_LIMIT:
+        return types.Part(inline_data=types.Blob(data=proxy.read_bytes(), mime_type="video/mp4"),
+                          video_metadata=types.VideoMetadata(fps=2.0))
+    up = _upload(client(cfg), proxy)
+    return types.Part(file_data=types.FileData(file_uri=up.uri, mime_type="video/mp4"),
+                      video_metadata=types.VideoMetadata(fps=2.0))

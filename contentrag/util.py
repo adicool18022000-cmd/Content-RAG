@@ -9,7 +9,8 @@ from .config import Config
 
 def source_path(cfg: Config, conn, media_id: str) -> Path | None:
     """First existing copy of a media item across all mounted roots."""
-    for loc in conn.execute("SELECT root, relpath FROM locations WHERE media_id=?", (media_id,)):
+    for loc in conn.execute("SELECT root, relpath FROM locations WHERE media_id=? "
+                            "ORDER BY relpath LIKE '\\_Duplicates/%' ESCAPE '\\'", (media_id,)):
         p = cfg.resolve(loc["root"], loc["relpath"])
         if p is not None and p.exists():
             return p
