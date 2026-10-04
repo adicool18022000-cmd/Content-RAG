@@ -50,7 +50,10 @@ DEFAULT_STYLE: dict = {
         "animation": "pop",
     },
     "grade": {"lut": None, "contrast": 1.05, "saturation": 1.08, "brightness": 0.0, "warmth": 0.0, "vignette": False},
-    "transitions": {"style": "leak", "where": "sections", "duration": 0.7, "opacity": 0.85},
+    # library: "auto" uses imported recipes (crag assets import <template.xml>), "off" = loose leaks + SFX.
+    # prefer: only these recipe ids, e.g. ["T04", "T13", "T21"] for a page with a specific look.
+    "transitions": {"style": "leak", "where": "sections", "duration": 0.7, "opacity": 0.85,
+                    "library": "auto", "prefer": None, "plate_opacity": 1.0},
     "sfx": {"on_broll": "whoosh", "on_transition": "shutter", "before_payoff": "riser", "on_hook": "impact",
             "volume": 0.6},
     "music": {"volume_under_voice": 0.12, "volume_alone": 0.9},

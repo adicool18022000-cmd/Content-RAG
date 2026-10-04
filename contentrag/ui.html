@@ -79,9 +79,12 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
 
     <section>
       <h2>Setup</h2>
+      <div class="row"><span>AI for analysis</span>
+        <select id="backend" title="Which AI looks at your footage"></select></div>
+      <div class="note" id="backendnote"></div>
       <div id="setup"></div>
       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <button id="checkKey">Check key &amp; models</button>
+        <button id="checkKey">Check key / login &amp; models</button>
       </div>
       <div class="note" id="models"></div>
     </section>
@@ -204,10 +207,20 @@ async function refresh() {
   const s = await (await fetch("/api/status")).json();
   if (s.error) { $("lib").textContent = s.error; return; }
   running = s.job.running;
-  $("lib").textContent = `${s.library} · ${s.backend === "gemini" ? "Gemini" : "Claude"} ${s.model}`;
-  $("setup").innerHTML =
-    `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>${esc(s.key_env)}</span><b>${s.key_present ? "found" : "missing"}</b></div>` +
-    (s.key_present ? "" : `<div class="note">Quit, run <code>export ${esc(s.key_env)}=your-key</code> in the terminal, then <code>crag ui</code> again.</div>`) +
+  const aiName = {gemini: "Gemini", "claude-code": "Claude subscription", claude: "Claude API"}[s.backend] || s.backend;
+  $("lib").textContent = `${s.library} · ${aiName} ${s.model}`;
+  const sel = $("backend");
+  if (document.activeElement !== sel) {
+    sel.innerHTML = Object.entries(s.backends || {}).map(([k, v]) =>
+      `<option value="${esc(k)}"${k === s.backend ? " selected" : ""}>${esc(v)}</option>`).join("");
+  }
+  sel.disabled = running || ["running", "waiting"].includes((s.autopilot || {}).status);
+  const keyRow = s.backend === "claude-code"
+    ? `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>Claude Code login</span><b>${s.key_present ? "logged in" : "not logged in"}</b></div>` +
+      (s.key_present ? "" : `<div class="note">${esc((s.login || {}).error || "")}. In a terminal run <code>claude</code>, type <code>/login</code> and sign in with your Claude account, then click Check.</div>`)
+    : `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>${esc(s.key_env)}</span><b>${s.key_present ? "found" : "missing"}</b></div>` +
+      (s.key_present ? "" : `<div class="note">Quit, run <code>export ${esc(s.key_env)}=your-key</code> in the terminal, then <code>crag ui</code> again.</div>`);
+  $("setup").innerHTML = keyRow +
     s.roots.map(r => `<div class="row"><span><span class="dot ${r.mounted ? "ok" : "warn"}"></span>${esc(r.name)} <span class="chip">${esc(r.kind)}</span></span><b>${r.mounted ? "mounted" : "not plugged in"}</b></div>`).join("");
   const m = s.media, total = m.videos + m.photos, req = s.requests || {};
   $("counts").innerHTML = [
@@ -257,15 +270,29 @@ $("estimate").onclick = async () => {
   $("est").textContent = "calculating…";
   const e = await (await fetch("/api/estimate")).json();
   if (e.error) { $("est").textContent = e.error; return; }
-  $("est").innerHTML = e.usd !== undefined
+  $("est").innerHTML = e.note
+    ? `${e.requests} requests with ${esc(e.model)} — ${esc(e.note)}`
+    : e.usd !== undefined
     ? `${e.requests} requests · ${e.video_hours} h video · ${e.photos} photos → about <b>$${e.usd}</b> with ${esc(e.model)} (rough estimate)`
     : `${e.requests} requests → about <b>$${e.usd_batch}</b> (batch) with ${esc(e.model)}`;
+};
+
+$("backend").onchange = async () => {
+  const r = await post("/api/backend", {backend: $("backend").value});
+  const j = await r.json();
+  $("backendnote").textContent = j.ok ? "Saved to contentrag.toml. Already analysed footage is kept; only what's left uses the new AI." : (j.error || "couldn't switch");
+  refresh();
 };
 
 $("checkKey").onclick = async () => {
   $("models").textContent = "checking…";
   const j = await (await fetch("/api/models")).json();
   if (j.error) { $("models").textContent = "✗ " + j.error; return; }
+  if (!j.models.some(m => /flash/.test(m))) {
+    refresh();
+    $("models").innerHTML = `Model <b>${esc(j.configured)}</b> (set in [claude_code] model; options: ${j.models.map(m => `<span class="chip">${esc(m)}</span>`).join(" ")})`;
+    return;
+  }
   const flash = j.models.filter(m => /flash/.test(m)).slice(0, 12);
   const has = j.models.includes(j.configured);
   $("models").innerHTML = `✓ Key works. Configured model <b>${esc(j.configured)}</b> ${has ? "is available" : "was NOT found — pick one below and set it in contentrag.toml"}.<br>Flash models: ${flash.map(m => `<span class="chip">${esc(m)}</span>`).join(" ")}`;

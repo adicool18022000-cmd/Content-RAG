@@ -8,10 +8,13 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
 - Index: `library_dir/index.sqlite`; vault: `library_dir/LifeVault` (its own `CLAUDE.md`).
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
-- AI description has two backends chosen by `[describe] backend`: `gemini` (default,
-  `contentrag/gemini.py`: 360p proxy video+audio, concurrent requests, resumable) and `claude`
-  (`contentrag/describe.py`: contact sheets via the Batches API; refusals retried with
-  `describe.retry_model`). Both write through `describe.store_result`.
+- AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the
+  dashboard Setup switch, or `crag --backend <name>` / `CRAG_BACKEND` for one run): `gemini`
+  (default, `contentrag/gemini.py`: 360p proxy video+audio, concurrent, resumable), `claude-code`
+  (`contentrag/claude_code.py`: the same contact sheets as `claude`, one headless `claude -p`
+  call each, billed to the Claude subscription; ANTHROPIC_API_KEY is stripped from its env;
+  usage limits wait until `resetsAt`) and `claude` (`contentrag/describe.py`: Batches API;
+  refusals retried with `describe.retry_model`). All write through `describe.store_result`.
 - Dashboard: `crag ui` (`contentrag/ui.py` + `ui.html`), bound to 127.0.0.1. API keys come from
   environment variables and must never be sent to the page.
 - Unattended runs: `crag autopilot` (`contentrag/autopilot.py`): preflight checks, quota/network
@@ -23,8 +26,10 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   local face grouping with OpenCV YuNet/SFace (`faces.py`), hidden people are removed by time
   range, never by dropping whole clips.
 - Edit engine (`contentrag/edit/`): one `EditPlan` (plan.py) built by `talking.py` / `beat.py`,
-  rendered by `render.py` (ffmpeg MP4) and `export.py` (Premiere FCP7 XML, AE JSX, HyperFrames,
-  Remotion 4.0.532). Styles + assets in `style.py`. Song analysis in `music.py`.
+  rendered by `render.py` (ffmpeg MP4, real Screen blend for plates) and `export.py` (Premiere FCP7 XML, AE JSX, HyperFrames,
+  Remotion 4.0.532). Styles + assets in `style.py`. Transition
+  recipes (plate + timed/levelled SFX) imported from the creator's Premiere template by
+  `crag assets import` live in `transitions.py` / `library/assets/transitions/`. Song analysis in `music.py`.
 - Footage roots are read-only for everything except `crag organize apply/undo` (explicit
   plan -> review -> apply; moves within a drive only, never deletes). Everything else that is
   generated goes under `library_dir`.

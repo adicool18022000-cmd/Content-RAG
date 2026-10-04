@@ -46,10 +46,15 @@ def preflight(cfg: Config, log=print) -> list[str]:
             problems.append(f"{tool} is not installed (brew install ffmpeg)")
     if not any(r.mounted for r in cfg.roots):
         problems.append("none of the footage folders in contentrag.toml are available (drives plugged in?)")
-    if cfg.backend == "gemini":
-        import os as _os
+    problems += backend_problems(cfg, log)
+    return problems
 
-        if not _os.environ.get(cfg.gemini_api_key_env):
+
+def backend_problems(cfg: Config, log=print) -> list[str]:
+    """Is the chosen AI backend usable right now (key set / logged in / model available)?"""
+    problems = []
+    if cfg.backend == "gemini":
+        if not os.environ.get(cfg.gemini_api_key_env):
             problems.append(f"{cfg.gemini_api_key_env} is not set in this terminal")
         else:
             from . import gemini
@@ -65,6 +70,16 @@ def preflight(cfg: Config, log=print) -> list[str]:
                     log(f"[autopilot] couldn't reach Gemini yet ({e}); will keep trying")
                 else:
                     problems.append(f"Gemini key check failed: {e}")
+    elif cfg.backend == "claude-code":
+        from . import claude_code
+
+        st = claude_code.auth_status()
+        if not st["logged_in"]:
+            problems.append(st["error"])
+    elif cfg.backend == "claude":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            problems.append("ANTHROPIC_API_KEY is not set in this terminal (the Claude API backend needs API "
+                            "credit; to use a Pro/Max subscription choose the claude-code backend)")
     return problems
 
 
@@ -275,13 +290,15 @@ class Autopilot:
             if res.get("budget"):
                 break
             if res.get("network"):
-                if not self.wait(NETWORK_WAIT, "no internet connection to Gemini"):
+                if not self.wait(NETWORK_WAIT, f"no internet connection to {self.ai_name}"):
                     break
                 continue
             if res.get("quota"):
                 wait = QUOTA_WAITS[min(quota_wait, len(QUOTA_WAITS) - 1)]
+                if res.get("resume_at"):  # Claude subscription: sleep until the usage window resets
+                    wait = min(max(60.0, res["resume_at"] - time.time() + 60), 6 * 3600)
                 quota_wait += 1
-                if not self.wait(wait, "Gemini quota / rate limit reached"):
+                if not self.wait(wait, f"{self.ai_name} quota / usage limit reached"):
                     break
                 continue
             quota_wait = 0
@@ -306,6 +323,10 @@ class Autopilot:
         return self._finish(conn)
 
     def _describe(self, conn, retry: bool) -> dict:
+        if self.cfg.backend == "claude-code":
+            from . import claude_code
+
+            return claude_code.run(self.cfg, conn, retry=retry, log=self.log, stop=self.stop)
         if self.cfg.backend == "gemini":
             from . import gemini
 
@@ -323,6 +344,10 @@ class Autopilot:
             if not self.wait(600, "Claude batch still processing"):
                 break
         return {}
+
+    @property
+    def ai_name(self) -> str:
+        return {"gemini": "Gemini", "claude-code": "Claude (subscription)", "claude": "Claude API"}[self.cfg.backend]
 
     def _finish(self, conn) -> dict:
         cfg = self.cfg

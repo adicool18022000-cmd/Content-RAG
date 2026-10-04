@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -817,4 +818,165 @@ def test_beat_edit(env, monkeypatch, tmp_path):
     peak = [c for c in plan.track("broll") if c.at >= 6.5]
     calm = [c for c in plan.track("broll") if c.at < 5.5]
     assert max(c.length for c in peak) < min(c.length for c in calm)  # faster cutting in the loud part
+    assert Path(out["mp4"]).exists()
+
+
+def test_backend_switch_and_claude_code(env, monkeypatch, tmp_path):
+    from contentrag import claude_code
+    from contentrag.autopilot import preflight
+    from contentrag.config import set_backend
+
+    cfg, conn = env
+    set_backend(cfg.source, "claude-code")
+    cfg = load_config(cfg.source)
+    assert cfg.backend == "claude-code" and "[prep]" in cfg.source.read_text()  # rest of the file kept
+    monkeypatch.setenv("CRAG_BACKEND", "gemini")  # crag --backend gemini <command>: this run only
+    assert load_config(cfg.source).backend == "gemini"
+    monkeypatch.delenv("CRAG_BACKEND")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-be-used")
+    assert "ANTHROPIC_API_KEY" not in claude_code._env()  # subscription only, never API billing
+
+    monkeypatch.setattr(claude_code, "auth_status", lambda *a: {"logged_in": False, "error": "not logged in"})
+    assert any("not logged in" in p for p in preflight(cfg))
+    monkeypatch.setattr(claude_code, "auth_status", lambda *a: {"logged_in": True, "error": None})
+    assert not preflight(cfg)
+
+    cfg.transcribe_enabled = False
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    seen = []
+
+    def limited(cfg_, content, schema, system, model=None):
+        raise claude_code.ClaudeCodeError("usage limit reached", 429, resume_at=time.time() + 3600)
+
+    monkeypatch.setattr(claude_code, "ask", limited)
+    res = claude_code.run(cfg, conn, log=lambda *_: None)
+    assert res["quota"] and res["resume_at"] > time.time()
+    assert conn.execute("SELECT count(*) FROM requests WHERE status!='pending' OR coalesce(attempts,0)>0"
+                        ).fetchone()[0] == 0  # no attempt used
+
+    def answer(cfg_, content, schema, system, model=None):
+        seen.append((model, [b["type"] for b in content]))
+        cid = next(r for r in conn.execute("SELECT * FROM requests WHERE status='pending' ORDER BY custom_id"))
+        msg = _fake_message(cid, cfg, conn)
+        return json.loads(msg.content[0].text), {"in": 100, "out": 50}
+
+    monkeypatch.setattr(claude_code, "ThreadPoolExecutor", _SerialPool)
+    monkeypatch.setattr(claude_code, "ask", answer)
+    res = claude_code.run(cfg, conn, log=lambda *_: None)
+    assert res["done"] >= 3 and not res.get("quota")
+    assert all("image" in kinds for _, kinds in seen) and seen[0][0] == cfg.cc_model
+    assert conn.execute("SELECT count(*) FROM moments").fetchone()[0] > 0
+
+    def logged_out(*a, **k):
+        raise claude_code.ClaudeCodeError("Claude Code login problem", 401)
+
+    conn.execute("UPDATE requests SET status='pending'")
+    monkeypatch.setattr(claude_code, "ask", logged_out)
+    res = claude_code.run(cfg, conn, log=lambda *_: None)
+    assert res["fatal"] and conn.execute("SELECT max(coalesce(attempts,0)) FROM requests").fetchone()[0] == 0
+    # error text from the CLI is sorted into the right bucket
+    assert claude_code._classify("Claude AI usage limit reached|1793865600", None).code == 429
+    assert claude_code._classify("Invalid API key · Please run /login", None).code == 401
+    assert claude_code._classify("fetch failed ENOTFOUND api.anthropic.com", None).code == "network"
+
+
+class _SerialPool:
+    """Runs jobs immediately, in order (the fake `ask` above reads the database)."""
+
+    def __init__(self, max_workers=None):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def submit(self, fn, *args):
+        from concurrent.futures import Future
+
+        f = Future()
+        try:
+            f.set_result(fn(*args))
+        except Exception as e:  # noqa: BLE001
+            f.set_exception(e)
+        return f
+
+
+TEMPLATE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4"><sequence id="s"><name>FX</name><rate><timebase>30</timebase></rate><media>
+<video><track></track><track>
+<clipitem id="c1"><name>T01 SNAP</name><start>57</start><end>64</end><in>84</in><out>91</out>
+<compositemode>screen</compositemode><file id="f-plate"><name>Plate.mp4</name>
+<pathurl>file://localhost/Users/someone/templates/flash_plates/Plate.mp4</pathurl></file></clipitem>
+<clipitem id="c2"><name>T02 RISER INTO FLASH</name><start>205</start><end>221</end><in>9</in><out>25</out>
+<compositemode>screen</compositemode><file id="f-plate"/></clipitem>
+</track></video>
+<audio><track>
+<clipitem id="a1"><name>T01 Camera Click</name><start>58</start><end>69</end><in>0</in><out>11</out>
+<file id="f-click"><name>Camera Click.MP3</name><pathurl>file://localhost/Users/someone/templates/Camera%20Click.MP3</pathurl></file>
+<filter><effect><name>Audio Levels</name><parameter><parameterid>level</parameterid><value>0.79433</value></parameter></effect></filter></clipitem>
+<clipitem id="a2"><name>T02 Riser</name><start>159</start><end>212</end><in>0</in><out>53</out>
+<file id="f-riser"><name>Riser.mp3</name><pathurl>file://localhost/Users/someone/templates/Riser.mp3</pathurl></file>
+<filter><effect><name>Audio Levels</name><parameter><parameterid>level</parameterid><value>0.631</value></parameter></effect></filter></clipitem>
+</track><track>
+<clipitem id="a3"><name>T02 Camera Click</name><start>216</start><end>227</end><in>0</in><out>11</out><file id="f-click"/></clipitem>
+</track></audio></media>
+<marker><name>T01 SNAP - CUT</name><in>60</in></marker>
+<marker><name>T02 RISER INTO FLASH - CUT</name><in>210</in></marker>
+</sequence></xmeml>
+"""
+
+
+def test_transition_library_from_premiere_template(env, monkeypatch, tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from contentrag.edit import run, transitions
+    from contentrag.edit.plan import EditPlan
+    from contentrag.edit.talking import Word
+
+    cfg, conn = _analysed(env, monkeypatch)
+    _assets(cfg)
+    tpl = tmp_path / "templates"
+    (tpl / "flash_plates").mkdir(parents=True)
+    (tpl / "fx.xml").write_text(TEMPLATE_XML)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=orange:s=270x480:r=30:d=4",
+                    str(tpl / "flash_plates" / "Plate.mp4")], check=True)
+    for n in ("Camera Click.MP3", "Riser.mp3"):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=500:d=2", str(tpl / n)], check=True)
+    res = transitions.import_template(cfg, tpl / "fx.xml", log=lambda *_: None)
+    assert res["recipes"] == 2 and res["usable"] == 2 and not res["missing"]
+    lib = {r["id"]: r for r in transitions.load_library(cfg)}
+    snap, riser = lib["T01"], lib["T02"]
+    assert snap["offset"] == pytest.approx(-0.1) and snap["plate_in"] == pytest.approx(2.8)
+    assert snap["sounds"][0]["gain"] == pytest.approx(0.794, abs=0.001)
+    assert riser["sounds"][0]["offset"] == pytest.approx(-1.7) and "riser" in riser["feels"]
+    assert transitions.choose(list(lib.values()), "payoff", "x")["id"] == "T02"
+
+    aroll = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=720x1280:rate=30:duration=8",
+                    "-f", "lavfi", "-i", "sine=f=300:d=8", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(aroll)], check=True)
+    words = [Word(0.2 + i * 0.6, 0.7 + i * 0.6, w) for i, w in enumerate(
+        "Aaj main Thailand gaya. Wahan fire show dekha aur pagal hogaya yaar.".split())]
+    understanding = {"topic": "t", "hook_query": "colour bars", "collection_hint": "", "payoff_line": 1,
+                     "lines": [{"index": i, "english": "line", "roman": "line", "visual_query": "colour bars",
+                                "wants_broll": True, "emphasis": []} for i in range(3)]}
+    out = run.make_talking(cfg, conn, aroll, "fx reel", {"mp4", "premiere"}, words=words,
+                           understanding=understanding, use_vectors=False, log=lambda *_: None)
+    plan = EditPlan.load(Path(out["plan"]))
+    recipes = [c for c in plan.track("overlay") if c.role == "transition"]
+    assert recipes and all(c.blend == "screen" and "Plate.mp4" in c.file for c in recipes)
+    payoff = next(c for c in plan.clips if c.role == "payoff")
+    assert any(c.note.startswith("T02") and c.end > payoff.at for c in recipes)  # riser recipe into the payoff
+    assert any("Riser.mp3" in s.file and s.at == pytest.approx(payoff.at - 1.7, abs=0.01) for s in plan.sounds)
+    assert not any(Path(s.file).parent.name == "riser" for s in plan.sounds)  # no extra loose riser on top
+    root = ET.parse(out["premiere"]).getroot()
+    levels = [p.findtext("value") for p in root.iter("parameter") if p.findtext("parameterid") == "level"]
+    assert "0.7940" in levels
+    for track in root.findall(".//audio/track"):  # no overlapping clips on one Premiere track
+        spans = sorted((int(c.findtext("start")), int(c.findtext("end"))) for c in track.findall("clipitem"))
+        assert all(a[1] <= b[0] for a, b in zip(spans, spans[1:]))
     assert Path(out["mp4"]).exists()

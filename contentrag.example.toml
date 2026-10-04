@@ -29,9 +29,9 @@ path = "/Volumes/SSD1/Brand_Broll"
 kind = "brand"
 
 [transcribe]
-# Local Whisper transcription. Optional when describing with Gemini, which
-# listens to the audio itself; keep it on if you want a separate
-# Whisper transcript as well.
+# Local Whisper transcription. Optional with Gemini, which listens to the
+# audio itself. Turn it ON with "claude-code" / "claude": Claude only sees
+# frames, so the Whisper transcript is how it knows what was said.
 enabled = false
 # mlx-whisper model (runs on Apple Silicon). turbo is ~8x faster than
 # large-v3 with similar Hindi quality.
@@ -42,7 +42,13 @@ language = "hi"
 # Which AI watches the footage:
 #   "gemini" -> sends a small 360p copy of each clip (video + audio) to Gemini.
 #               Cheapest; needs GEMINI_API_KEY. Settings in [gemini] below.
-#   "claude" -> sends frame contact sheets to Claude via the Batches API.
+#   "claude-code" -> frame contact sheets to Claude through Claude Code, billed
+#               to your Claude Pro/Max subscription (no API key). Log in once
+#               with `claude` then /login. Settings in [claude_code] below.
+#   "claude" -> frame contact sheets to the Claude API (Batches API); needs
+#               ANTHROPIC_API_KEY and API credit (separate from a subscription).
+# Switch any time: `crag backend claude-code` or the dashboard's Setup panel.
+# What's already analysed is kept; only what's left uses the new one.
 backend = "gemini"
 # Claude settings (used only when backend = "claude").
 # Claude model that looks at the frames. Opus 5.5 gives the best
@@ -52,6 +58,17 @@ model = "claude-opus-5-5"
 effort = "low"
 # Model used to retry the few requests the first model declines.
 retry_model = "claude-sonnet-5-5"
+
+[claude_code]
+# Model alias or full name: "opus" (best), "sonnet" (faster, uses less of
+# your plan's limits), "haiku".
+model = "opus"
+# Used by "Retry failed" for requests the first model declined.
+retry_model = "sonnet"
+effort = "low"
+# Requests at once. The plan's usage limits are shared with your own Claude
+# use; when they're reached, analysis waits for the reset and continues.
+workers = 2
 
 [gemini]
 # gemini-3.5-flash gives better descriptions; gemini-3.5-flash-lite costs about

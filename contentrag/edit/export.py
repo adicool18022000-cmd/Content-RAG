@@ -96,15 +96,31 @@ def export_premiere(plan: EditPlan, out_dir: Path) -> Path:
         if (c.track == "aroll" or c.audio) and _probe(c.file, cache)["audio"]:
             atracks["voice" if c.track == "aroll" else "clip"].append(
                 clipitem(f"a{i}", c.file, c.at, c.src_in, c.src_out, audio_track=True))
-    for k, s in enumerate(plan.sounds):
+    sfx_lanes: list[list[str]] = []
+    lane_end: list[float] = []
+    for k, s in sorted(enumerate(plan.sounds), key=lambda ks: ks[1].at):
         dur = _probe(s.file, cache)["duration"]
-        end = s.src_out if s.src_out else dur
-        atracks["music" if s.kind == "music" else "sfx"].append(
-            clipitem(f"s{k}", s.file, s.at, s.src_in, min(end, s.src_in + max(0.1, plan.duration - s.at)),
-                     audio_track=True))
+        end = min(s.src_out if s.src_out else dur, s.src_in + max(0.1, plan.duration - s.at))
+        level = (f"<filter><effect><name>Audio Levels</name><effectid>audiolevels</effectid><effectcategory>"
+                 f"audiolevels</effectcategory><effecttype>audiolevels</effecttype><mediatype>audio</mediatype>"
+                 f"<parameter><parameterid>level</parameterid><name>Level</name><valuemin>0</valuemin><valuemax>"
+                 f"3.98109</valuemax><value>{max(0.0, min(3.98, s.volume)):.4f}</value></parameter></effect></filter>")
+        item = clipitem(f"s{k}", s.file, s.at, s.src_in, end, extra=level, audio_track=True)
+        if s.kind == "music":
+            atracks["music"].append(item)
+            continue
+        # clips on one track can't overlap: stacked SFX (riser + flash + click) get their own tracks
+        lane = next((i for i, e in enumerate(lane_end) if e <= fr(s.at)), None)
+        if lane is None:
+            sfx_lanes.append([])
+            lane_end.append(0)
+            lane = len(sfx_lanes) - 1
+        sfx_lanes[lane].append(item)
+        lane_end[lane] = fr(s.at) + max(1, fr(end - s.src_in))
     plan.fix_duration()
     vxml = "".join(f"<track>{''.join(vtracks[t])}</track>" for t in ("aroll", "broll", "overlay"))
-    axml = "".join(f"<track>{''.join(atracks[t])}</track>" for t in ("voice", "clip", "sfx", "music"))
+    axml = "".join(f"<track>{''.join(items)}</track>"
+                   for items in [atracks["voice"], atracks["clip"], *(sfx_lanes or [[]]), atracks["music"]])
     xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n<xmeml version="4">'
            f'<sequence id="seq-1"><name>{escape(plan.name)}</name><duration>{fr(plan.duration)}</duration>{rate}'
            f"<media><video><format><samplecharacteristics>{rate}<width>{plan.width}</width>"
@@ -189,7 +205,9 @@ def export_after_effects(plan: EditPlan, out_dir: Path) -> Path:
                          f"{(s.src_out or s.src_in + plan.duration):.3f}, 'fill', {{volume: {s.volume}}});")
     for s in plan.sounds:
         if s.kind != "music":
-            lines.append(f"addClip({j(s.file)}, {s.at:.3f}, 0, 30, 'fill', {{volume: {s.volume}}});")
+            out = s.src_out if s.src_out else s.src_in + 30
+            lines.append(f"addClip({j(s.file)}, {s.at:.3f}, {s.src_in:.3f}, {out:.3f}, 'fill', "
+                         f"{{volume: {s.volume}}});")
     for track in ("aroll", "broll", "overlay"):
         for c in sorted(plan.track(track), key=lambda c: c.at):
             opts = {"mute": not (c.audio or track == "aroll"), "volume": c.volume if track != "overlay" else 1,
@@ -222,6 +240,8 @@ def _materialize_sounds(plan: EditPlan, media: Path) -> list[str]:
             cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{s.src_in:.3f}", "-i", s.file]
             if s.src_out:
                 cmd += ["-t", f"{s.src_out - s.src_in:.3f}"]
+            if s.volume > 1:  # browsers cap volume at 1: louder-than-source SFX (+6 dB clicks) are baked in
+                cmd += ["-af", f"volume={s.volume:.3f}"]
             subprocess.run(cmd + ["-vn", "-c:a", "aac", "-b:a", "192k", str(out)], capture_output=True, timeout=600)
         names.append(out.name)
     return names
@@ -251,14 +271,15 @@ def export_hyperframes(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Pat
         c = plan.clips[p["index"]]
         cls = "clip leak" if c.track == "overlay" else "clip"
         audio = ' data-has-audio="true"' + f' data-volume="{c.volume:.2f}"' if p["audio"] else " muted"
-        els.append(f'  <video id="{c.track}-{p["index"]:03d}" class="{cls}" data-start="{c.at:.3f}" '
+        look = f' style="opacity:{max(0.0, min(1.0, c.volume)):.2f}"' if c.track == "overlay" else ""
+        els.append(f'  <video id="{c.track}-{p["index"]:03d}" class="{cls}"{look} data-start="{c.at:.3f}" '
                    f'data-duration="{c.length:.3f}" data-track-index="{order[c.track]}"{audio} '
                    f'src="media/{p["path"].name}" playsinline></video>')
     for k, s in enumerate(plan.sounds):
         length = (s.src_out - s.src_in) if s.src_out else _sound_length(media / snd[k])
         length = min(length or 0.1, max(0.1, plan.duration - s.at))
         els.append(f'  <audio id="{s.kind}-{k:02d}" data-start="{s.at:.3f}" data-duration="{length:.3f}" '
-                   f'data-track-index="{20 + k}" data-volume="{s.volume:.2f}" src="media/{snd[k]}"></audio>')
+                   f'data-track-index="{20 + k}" data-volume="{min(1.0, s.volume):.2f}" src="media/{snd[k]}"></audio>')
     for k, c in enumerate(plan.captions):
         text = escape(c.text)
         for w in c.emphasis:
@@ -283,7 +304,7 @@ def export_hyperframes(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Pat
   #stage {{ position: relative; width: {plan.width}px; height: {plan.height}px; overflow: hidden; background: #000;
             filter: {_css_filter(plan.grade)}; }}
   #stage video.clip {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }}
-  #stage .leak {{ mix-blend-mode: screen; opacity: .85; }}
+  #stage .leak {{ mix-blend-mode: screen; }}
   #stage .cap {{ position: absolute; left: 60px; right: 60px; top: {float(cs.get('position', 0.68)) * 100:.1f}%;
                  transform: translateY(-50%); text-align: center; font-family: '{font}', sans-serif;
                  font-weight: 800; font-size: {int(cs.get('size', 74))}px; line-height: 1.05; color: {cs.get('color', '#FFFFFF')};
@@ -389,7 +410,7 @@ def export_remotion(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Path:
         clips.append({"track": c.track, "at": c.at, "src_in": 0.0, "src_out": c.length, "media": f"media/{dst.name}",
                       "has_audio": p["audio"], "volume": c.volume})
     snd = _materialize_sounds(plan, media)
-    sounds = [{"at": s.at, "volume": s.volume, "media": f"media/{snd[k]}",
+    sounds = [{"at": s.at, "volume": min(1.0, s.volume), "media": f"media/{snd[k]}",
                "length": min((s.src_out - s.src_in) if s.src_out else (_sound_length(media / snd[k]) or 0.1),
                              max(0.1, plan.duration - s.at))}
               for k, s in enumerate(plan.sounds)]

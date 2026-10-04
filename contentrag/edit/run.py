@@ -91,10 +91,13 @@ def make_beat(cfg: Config, conn, song: str, name: str, targets: set[str], style_
     start = kw.get("start", 0.0) or 0.0
     for sec in info.sections[1:]:  # a transition where the energy changes
         if start < sec.start < start + plan.duration:
-            _transition(cfg, plan, style, sec.start - start, f"{name}-{sec.start}")
-    for drop in info.drops:  # riser into each drop
+            if not any(abs(sec.start - d) < 1.0 for d in info.drops):
+                _transition(cfg, plan, style, sec.start - start, f"{name}-{sec.start}", "section")
+    for drop in info.drops:  # riser into each drop (a riser recipe from the library, if imported)
         if start < drop < start + plan.duration:
-            _sfx(cfg, plan, style["sfx"].get("before_payoff"), drop - start, style["sfx"]["volume"], name, end_at=True)
+            if not _transition(cfg, plan, style, drop - start, f"{name}-drop-{drop}", "drop"):
+                _sfx(cfg, plan, style["sfx"].get("before_payoff"), drop - start, style["sfx"]["volume"], name,
+                     end_at=True)
     return render_plan(cfg, conn, plan, targets, log)
 
 

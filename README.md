@@ -16,7 +16,8 @@ footage SSDs (never modified)
    │  crag prep        sample frames, detect scene cuts, extract audio      (local, ffmpeg)
    │  crag transcribe  Whisper large-v3-turbo, Hindi          (optional, local, Apple GPU)
    │  crag describe    Gemini watches a 360p copy of each clip, audio included (default)
-   │                   — or Claude looks at frame contact sheets (backend = "claude")
+   │                   — or Claude looks at frame contact sheets: on your Claude Pro/Max plan
+   │                     (backend = "claude-code") or the Claude API (backend = "claude")
    │  crag embed       multilingual embeddings for search by meaning         (local)
    ▼  crag vault       Obsidian notes: timeline, events, B-roll cards
 library_dir/  index.sqlite · frames/ · vectors.npz · LifeVault/
@@ -86,6 +87,8 @@ at least one drive is plugged in. That way a setup mistake can't fail every file
 | Drive unplugged before or during the run | Its files wait (no attempt used); the summary names the drive |
 | Library drive almost full (< 2 GB) | Preparation pauses with a message |
 | Spending cap reached | Analysis pauses; raise `budget_usd` and start again |
+| Claude subscription usage limit (claude-code) | Waits until the 5-hour/weekly window resets (time read from Claude Code), then continues; no attempt used |
+| Claude Code not logged in | Autopilot refuses to start and says to run `claude` → `/login` |
 | File deleted or replaced on a plugged-in drive | Removed or re-analysed on the next scan |
 | Two runs at once (Terminal + dashboard) | The second one refuses to start (lock file) |
 
@@ -104,13 +107,29 @@ Use `kind = "brand"` for clips you shot on purpose for content. Set `library_dir
 on one SSD. Drives that aren't plugged in are skipped, and files are recognised by their
 content, so they can be moved or renamed later without being re-indexed.
 
-For the `describe` step you need a Gemini API key (aistudio.google.com). If you use
-`backend = "claude"` instead, you need an Anthropic API key, which is billed separately from a
-Claude subscription.
+### Which AI analyses the footage (`crag backend`)
+
+| Backend | Pays with | Needs | Sees |
+|---|---|---|---|
+| `gemini` (default) | Gemini API credit, per use | `export GEMINI_API_KEY=...` | 360p video **with audio** |
+| `claude-code` | your Claude **Pro/Max subscription** (usage limits, no per-request bill) | Claude Code installed and logged in | frame contact sheets + Whisper transcript |
+| `claude` | Anthropic API credit, per use (separate from any subscription) | `export ANTHROPIC_API_KEY=...` | frame contact sheets + Whisper transcript |
 
 ```bash
-export GEMINI_API_KEY=...          # or ANTHROPIC_API_KEY for the Claude backend
+crag backend                 # shows all three, which one is on, and whether it's ready
+crag backend claude-code     # switch (writes [describe] backend in contentrag.toml)
+crag --backend gemini describe run --limit 5    # one command with another backend
 ```
+
+The dashboard's Setup panel has the same switch. Switching keeps everything already analysed;
+only what's left goes to the new one, and search, vault and edits work the same either way.
+
+For `claude-code`: `npm install -g @anthropic-ai/claude-code`, run `claude` once and type
+`/login` (sign in with the account that has the plan). `claude auth status` should say
+`"loggedIn": true`. crag removes `ANTHROPIC_API_KEY` from these calls so they never bill the
+API by accident. Claude can't hear audio, so set `[transcribe] enabled = true` (local Whisper,
+free) so it knows what was said in Hindi/Hinglish. Each request is one headless `claude -p` call
+with no tools, run from an empty folder, so it only ever sees the contact sheets crag sends.
 
 ## Running it (terminal alternative to the dashboard)
 
@@ -139,6 +158,10 @@ Rough numbers; the dashboard's "Estimate remaining" gives the real figure after 
 - So the whole archive comes to about $50–150 on Flash and $20–50 on Flash-Lite, versus several
   hundred dollars with Claude Opus.
 - `prep` runs locally for free. Most of the describe time goes on uploading the small proxies.
+- `claude-code` costs nothing extra on a Max plan, but a few hundred hours of footage is
+  thousands of requests, so expect it to spread over several usage windows (days rather than
+  one night). Autopilot waits for each reset by itself. `model = "sonnet"` in `[claude_code]`
+  gets through more per window than `opus`.
 
 ## Searching
 
@@ -239,10 +262,66 @@ the folders):
 
 If a folder is empty, that effect is simply skipped.
 
+**Transition library from your Premiere template.** A template sequence like
+`FlashLeak_SFX_9x16_Vertical.xml` (one marker per transition, e.g. "T04 RISER INTO FLASH - CUT",
+a flash/leak plate on V2 in Screen mode, SFX on A1–A3 with their levels) becomes ready-made
+recipes:
+
+```bash
+crag assets import ~/Downloads/templates/FlashLeak_SFX_9x16_Vertical.xml   # plates + SFX found next to it
+crag assets import template.xml --media /path/to/the/plates/and/sfx        # if they live elsewhere
+crag assets transitions                                                    # list: T01 Snap [quick] ...
+```
+
+The plates and sounds are copied into `library/assets/transitions/`, so the library carries
+them to another Mac. Edits then drop whole recipes onto cuts, keeping the template's frame
+offsets, pre-rolls and dB levels. Risers (T04, T05, T16, T18, T24, T26, T30) lead into the
+payoff and music drops. Hard hits (Paparazzi, Flash Stinger, Charge Up) take you out of the
+hook, and quick ones (Snap, Double Tap, Quick Burn) go on B-roll inserts. Soft leaks (Dream
+Reveal, Leak Swipe) go on calm section changes. A style can limit the choice with
+`"transitions": {"prefer": ["T04", "T13", "T21"]}` or turn it off with `"library": "off"`.
+The Premiere export keeps the plates in Screen mode and the SFX levels on separate tracks.
+The MP4 preview uses a real Screen blend.
+
 ### Experiments
 After posting, run `crag videos --posted thailand-scam --views 12000 --saves 340 --retention 41`.
 Then `crag videos --by-style` (and the brain's `Videos.md`) show which styles work best on each
 page.
+
+## Moving to another Mac
+
+The footage SSDs stay as they are. You move the code (git), your settings, and optionally the
+library (everything crag has generated).
+
+1. **On the new Mac:**
+   ```bash
+   xcode-select --install; /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   brew install ffmpeg uv node git
+   npm install -g @anthropic-ai/claude-code && claude      # then /login with the Max account
+   git clone https://github.com/adicool18022000-cmd/Content-RAG.git && cd Content-RAG
+   git checkout claude/happy-dijkstra-bztn00
+   uv venv && source .venv/bin/activate && uv pip install -e '.[mac]'
+   cp contentrag.example.toml contentrag.toml
+   ```
+2. **Settings**: in `contentrag.toml` point `[[roots]]` at the SSD folders as they mount on
+   this Mac (`ls /Volumes`). Set `library_dir` (on the SSD, e.g. `/Volumes/SSD1/crag-library`,
+   or on the laptop), `backend = "claude-code"` and `[transcribe] enabled = true`. Keep the
+   same root `name`s as on the old Mac if you bring the library along.
+3. **Library (only if the old Mac already indexed something)**: copy its `library_dir` folder
+   as a whole (index.sqlite, frames/, LifeVault/, styles/, assets/, exports/). Then nothing is
+   analysed twice, and usage counts, hidden people, styles and your vault notes come along.
+   If the library is already on the SSD, there's nothing to copy: just point `library_dir` at it.
+   Files are recognised by content, so a changed mount path (`/Volumes/SSD1` →
+   `/Volumes/T7`) is fine.
+4. **Your assets**: copy the templates folder (plates, SFX) over and run
+   `crag assets import <template.xml>` (not needed if `library/assets/` came along).
+5. **Check and start**: `crag backend` (should say `ready`), then `crag ui` → Start Autopilot,
+   or `crag autopilot --hours 48` in Terminal. Close other apps; keep the lid open or the Mac
+   on power (crag keeps it awake while running).
+
+Before running anything on the new Mac, close the old one's dashboard/Autopilot if the library
+is on the SSD that moves. The lock file stops two runs on the same library, but only on the
+same machine.
 
 ## Using it with Claude Code
 

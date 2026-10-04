@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG = "contentrag.toml"
+BACKENDS = {
+    "gemini": "Gemini API (GEMINI_API_KEY, pay per use)",
+    "claude-code": "Claude subscription via Claude Code (Pro/Max plan, no API key)",
+    "claude": "Claude API (ANTHROPIC_API_KEY, pay per use, Batches API)",
+}
 
 
 @dataclass
@@ -29,7 +34,7 @@ class Config:
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
     language: str = "hi"
     transcribe_enabled: bool = True
-    backend: str = "gemini"  # gemini | claude
+    backend: str = "gemini"  # gemini | claude (API key) | claude-code (Claude subscription)
     gemini_model: str = "gemini-3.5-flash"
     gemini_api_key_env: str = "GEMINI_API_KEY"
     gemini_resolution: str = "low"  # low | medium | high
@@ -37,6 +42,10 @@ class Config:
     gemini_fps: float = 1.0
     gemini_workers: int = 4
     gemini_budget_usd: float = 0.0  # 0 = no cap
+    cc_model: str = "opus"
+    cc_retry_model: str = "sonnet"
+    cc_effort: str = "low"
+    cc_workers: int = 2
     model: str = "claude-opus-5-5"
     effort: str = "low"
     retry_model: str = "claude-sonnet-5-5"
@@ -105,9 +114,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     p = raw.get("prep", {})
     e = raw.get("embed", {})
     g = raw.get("gemini", {})
-    backend = d.get("backend", Config.backend)
-    if backend not in ("gemini", "claude"):
-        raise SystemExit("[describe] backend must be 'gemini' or 'claude'.")
+    cc = raw.get("claude_code", {})
+    backend = os.environ.get("CRAG_BACKEND") or d.get("backend", Config.backend)
+    if backend not in BACKENDS:
+        raise SystemExit(f"[describe] backend must be one of: {', '.join(BACKENDS)}.")
     return Config(
         library_dir=Path(raw["library_dir"]).expanduser(),
         roots=roots,
@@ -123,6 +133,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         gemini_fps=float(g.get("fps", Config.gemini_fps)),
         gemini_workers=int(g.get("workers", Config.gemini_workers)),
         gemini_budget_usd=float(g.get("budget_usd", Config.gemini_budget_usd)),
+        cc_model=cc.get("model", Config.cc_model),
+        cc_retry_model=cc.get("retry_model", Config.cc_retry_model),
+        cc_effort=cc.get("effort", Config.cc_effort),
+        cc_workers=max(1, int(cc.get("workers", Config.cc_workers))),
         model=d.get("model", Config.model),
         effort=d.get("effort", Config.effort),
         retry_model=d.get("retry_model", Config.retry_model),
@@ -135,3 +149,27 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         embed_model=e.get("model", Config.embed_model),
         source=path,
     )
+
+
+def set_backend(path: str | os.PathLike, backend: str) -> None:
+    """Switch [describe] backend in contentrag.toml, keeping the rest of the file (and comments) as is."""
+    import re
+
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of: {', '.join(BACKENDS)}")
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    line = f'backend = "{backend}"'
+    m = re.search(r"^\[describe\][^\S\n]*$", text, flags=re.M)
+    if m is None:
+        text = text.rstrip("\n") + f"\n\n[describe]\n{line}\n"
+    else:
+        nxt = re.search(r"^\[", text[m.end():], flags=re.M)
+        end = m.end() + (nxt.start() if nxt else len(text) - m.end())
+        section = text[m.end():end]
+        if re.search(r"^[ \t]*backend[ \t]*=.*$", section, flags=re.M):
+            section = re.sub(r"^[ \t]*backend[ \t]*=.*$", line, section, count=1, flags=re.M)
+        else:
+            section = "\n" + line + section
+        text = text[:m.end()] + section + text[end:]
+    path.write_text(text, encoding="utf-8")

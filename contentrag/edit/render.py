@@ -126,7 +126,18 @@ def render_mp4(plan: EditPlan, out_dir: Path, pieces: list[dict], out_name: str 
     for j, p in enumerate(layered, 1):
         c = plan.clips[p["index"]]
         src = f"[{j}:v]"
-        if c.track == "overlay":  # dark parts transparent ~ "screen" blend for light leaks
+        if c.track == "overlay" and (c.blend or "screen") in ("screen", "add", "lighten"):
+            # a real Screen blend, like Premiere/AE: the plate is padded with black (neutral in screen)
+            # up to its start and the picture underneath passes through after it ends
+            mode = {"add": "addition"}.get(c.blend, c.blend or "screen")
+            graph.append(f"{src}scale={W}:{H},setsar=1,fps={fps},format=gbrp,setpts=PTS-STARTPTS,"
+                         f"tpad=start_duration={c.at:.3f}:color=black[v{j}]")
+            graph.append(f"[{cur}]format=gbrp[b{j}]")
+            graph.append(f"[b{j}][v{j}]blend=all_mode={mode}:all_opacity={max(0.0, min(1.0, c.volume)):.2f}:"
+                         f"eof_action=pass:shortest=0:repeatlast=0[o{j}]")
+            cur = f"o{j}"
+            continue
+        if c.track == "overlay":  # other modes: dark parts transparent
             src += (f"scale={W}:{H},setsar=1,format=rgba,colorkey=0x000000:0.28:0.25,"
                     f"colorchannelmixer=aa={max(0.0, min(1.0, c.volume)):.2f},")
         graph.append(f"{src}setpts=PTS-STARTPTS+{c.at:.3f}/TB[v{j}]")

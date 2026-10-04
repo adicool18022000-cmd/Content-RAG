@@ -16,6 +16,11 @@ example reels -> `crag style learn <name> ref1.mp4 ref2.mp4 --page <page>`. Vari
 experiments (`page1-fast`) are fine; results are compared with `crag videos --by-style`.
 Assets (light leaks, risers, shutter, whoosh, LUTs, fonts) live in `library_dir/assets/`
 (`crag assets` shows counts); if a folder is empty that effect is skipped - tell the user.
+The creator's transition library (`crag assets transitions`: T01 Snap ... T30 Riser Whoosh, each
+a flash/leak plate + SFX with exact offsets and levels from their Premiere template) is used
+automatically on cuts. In `plan.json` these are `overlay` clips with `role: "transition"` and a
+note starting with the recipe id, plus their sounds. To swap one, replace the clip and its
+sounds together, or set the style's `transitions.prefer` list and re-plan.
 
 ## A. Talking head (the main workflow)
 ```

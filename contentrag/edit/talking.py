@@ -173,16 +173,22 @@ UNDERSTAND_SCHEMA = {
 
 
 def understand(cfg: Config, lines: list[Line], notes: str = "", log=print) -> dict:
-    from .. import gemini
-
+    """Ask the AI what each line means and what footage would illustrate it (the configured backend:
+    Claude subscription for claude-code, else Gemini)."""
     text = "\n".join(f"{i}: [{ln.start:.1f}-{ln.end:.1f}] {ln.text}" for i, ln in enumerate(lines))
+    prompt = f"Talking-head reel transcript (Hindi/Hinglish/English):\n{text}\n\nCreator notes: {notes or '-'}"
+    system = ("You plan B-roll and captions for Instagram reels made from the creator's own life footage archive "
+              "(searchable by English descriptions).")
     try:
-        return gemini.ask_json(cfg, [f"Talking-head reel transcript (Hindi/Hinglish/English):\n{text}\n\n"
-                                     f"Creator notes: {notes or '-'}"], UNDERSTAND_SCHEMA,
-                               system="You plan B-roll and captions for Instagram reels made from the creator's own "
-                                      "life footage archive (searchable by English descriptions).")
+        if cfg.backend == "claude-code":
+            from .. import claude_code
+
+            return claude_code.ask(cfg, [{"type": "text", "text": prompt}], UNDERSTAND_SCHEMA, system)[0]
+        from .. import gemini
+
+        return gemini.ask_json(cfg, [prompt], UNDERSTAND_SCHEMA, system=system)
     except (Exception, SystemExit) as e:  # offline / no key: simple fallback, still a usable plan
-        log(f"[edit] couldn't ask Gemini ({e}); using the transcript as search text")
+        log(f"[edit] couldn't ask the AI ({e}); using the transcript as search text")
         return {"topic": "", "hook_query": "funny surprising moment", "collection_hint": "",
                 "payoff_line": max(0, len(lines) - 1),
                 "lines": [{"index": i, "english": ln.text, "roman": ln.text, "visual_query": ln.text,
@@ -264,7 +270,7 @@ def plan_talking(cfg: Config, conn, aroll: Path, name: str, style_name: str | No
         plan.clips.append(Clip("aroll", str(aroll), round(a, 3), round(b, 3), round(at, 3), role="talk", audio=True,
                                reframe="crop"))
     if hook:
-        _transition(cfg, plan, style, t0, f"{name}-hook")
+        _transition(cfg, plan, style, t0, f"{name}-hook", "hook")
 
     # 5. B-roll per line
     used: dict[int, float] = {}  # moment -> next unused second
@@ -277,8 +283,8 @@ def plan_talking(cfg: Config, conn, aroll: Path, name: str, style_name: str | No
             plan.clips.append(Clip("broll", hook["file"], hook["start"], round(hook["start"] + length, 3),
                                    round(start_out, 3), hook["media_id"], hook["moment_id"], "payoff",
                                    reframe=_reframe(hook, style), note=f"payoff, hook shown in full: {ln.english}"))
-            _sfx(cfg, plan, sfx.get("before_payoff"), start_out, sfx["volume"], name, end_at=True)
-            _transition(cfg, plan, style, start_out, f"{name}-payoff")
+            if not _transition(cfg, plan, style, start_out, f"{name}-payoff", "payoff"):
+                _sfx(cfg, plan, sfx.get("before_payoff"), start_out, sfx["volume"], name, end_at=True)
             last_end = start_out + length
             continue
         if not ln.wants_broll or end_out - max(start_out, last_end) < pace["broll_min"]:
@@ -304,9 +310,9 @@ def plan_talking(cfg: Config, conn, aroll: Path, name: str, style_name: str | No
         plan.clips.append(Clip("broll", c["file"], round(src_in, 3), round(src_in + need, 3), round(at, 3),
                                c["media_id"], c["moment_id"], "broll", reframe=_reframe(c, style),
                                note=f"line {i}: {ln.english or ln.text} → {c['description']}"))
-        _sfx(cfg, plan, sfx.get("on_broll"), at - 0.08, sfx["volume"] * 0.7, f"{name}-{i}")
-        if style["transitions"]["where"] == "every_broll":
-            _transition(cfg, plan, style, at, f"{name}-{i}")
+        if style["transitions"]["where"] != "every_broll" or \
+                not _transition(cfg, plan, style, at, f"{name}-{i}", "broll"):
+            _sfx(cfg, plan, sfx.get("on_broll"), at - 0.08, sfx["volume"] * 0.7, f"{name}-{i}")
         last_end = at + need
 
     # 6. captions, music
@@ -366,8 +372,19 @@ def probe_audio(path: Path) -> float:
     return float(r.stdout.strip() or 0)
 
 
-def _transition(cfg, plan: EditPlan, style: dict, at: float, seed: str):
+def _transition(cfg, plan: EditPlan, style: dict, at: float, seed: str, moment: str = "section") -> bool:
+    """A transition on the cut at `at`. With an imported transition library (crag assets import) a whole
+    recipe (plate + its SFX, timed and levelled as in the template) is used; returns True then."""
     t = style["transitions"]
+    if t.get("library", "auto") != "off" and t["style"] != "cut":
+        from .transitions import apply, choose, load_library
+
+        recipes = load_library(cfg)
+        recent = {c.note.split(" ")[0] for c in plan.track("overlay")[-3:] if c.role == "transition"}
+        r = choose(recipes, moment, seed, avoid=recent, prefer=t.get("prefer"))
+        if r is not None:
+            apply(cfg, plan, r, at, sfx_volume=style["sfx"]["volume"] / 0.6, opacity=t.get("plate_opacity", 1.0))
+            return True
     if t["style"] == "leak":
         leak = pick_asset(cfg, "light_leaks", seed)
         if leak is not None:
@@ -375,6 +392,7 @@ def _transition(cfg, plan: EditPlan, style: dict, at: float, seed: str):
             plan.clips.append(Clip("overlay", str(leak), 0.0, d, round(max(0.0, at - d / 2), 3), role="leak",
                                    blend="screen", volume=t.get("opacity", 0.85), note="light leak"))
     _sfx(cfg, plan, style["sfx"].get("on_transition"), at - 0.05, style["sfx"]["volume"], seed)
+    return False
 
 
 def _captions(lines: list[Line], tmap: TimeMap, cs: dict) -> list[Caption]:

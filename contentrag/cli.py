@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+
+from pathlib import Path
 
 from . import describe as describe_mod
 from .config import load_config
@@ -68,6 +71,15 @@ def cmd_transcribe(args):
 
 def cmd_describe(args):
     cfg, conn = _open(args)
+    if cfg.backend == "claude-code" and args.action in ("estimate", "run", "retry", "sync"):
+        from . import claude_code
+
+        if args.action == "estimate":
+            print(json.dumps(claude_code.estimate(cfg, conn), indent=2))
+        else:
+            limit = args.limit or (3 if args.action == "sync" else None)
+            print(json.dumps(claude_code.run(cfg, conn, limit=limit, retry=args.action == "retry"), indent=2))
+        return
     if cfg.backend == "gemini" and args.action in ("estimate", "run", "retry"):
         from . import gemini
 
@@ -77,7 +89,8 @@ def cmd_describe(args):
             print(json.dumps(gemini.run(cfg, conn, limit=args.limit, retry=args.action == "retry"), indent=2))
         return
     if args.action == "run":
-        raise SystemExit("'describe run' is for backend = \"gemini\"; with Claude use submit/collect.")
+        raise SystemExit("'describe run' is for the gemini / claude-code backends; with the Claude API use "
+                         "submit/collect.")
     if args.action == "estimate":
         print(json.dumps(describe_mod.estimate(cfg, conn, args.model), indent=2))
     elif args.action == "submit":
@@ -241,10 +254,38 @@ def cmd_style(args):
 
 
 def cmd_assets(args):
+    from .edit import transitions
     from .edit.style import asset_report
 
     cfg = load_config(args.config)
-    print(json.dumps(asset_report(cfg), indent=2))
+    if args.action == "import":
+        if not args.xml:
+            raise SystemExit("usage: crag assets import <template.xml> [--media <folder>]")
+        print(json.dumps(transitions.import_template(cfg, Path(args.xml), args.media and Path(args.media)), indent=2))
+        return
+    print(json.dumps(asset_report(cfg) | {"transitions": len(transitions.load_library(cfg))}, indent=2))
+    if args.action == "transitions":
+        print("\n".join(transitions.summary(cfg)) or "no transition library yet: crag assets import <template.xml>")
+
+
+def cmd_backend(args):
+    """Show or switch the AI analysis backend (writes [describe] backend in contentrag.toml)."""
+    from .config import BACKENDS, DEFAULT_CONFIG, set_backend
+
+    if args.name:
+        path = Path(args.config or os.environ.get("CONTENTRAG_CONFIG", DEFAULT_CONFIG)).expanduser()
+        load_config(path)  # fails early on a broken config
+        set_backend(path, args.name)
+        print(f"analysis backend is now {args.name}: {BACKENDS[args.name]}")
+    cfg = load_config(args.config)
+    for name, what in BACKENDS.items():
+        print(f"{'*' if name == cfg.backend else ' '} {name:<12} {what}")
+    from .autopilot import backend_problems
+
+    problems = backend_problems(cfg)
+    print("ready" if not problems else "not ready: " + " · ".join(problems))
+    if cfg.backend in ("claude", "claude-code") and not cfg.transcribe_enabled:
+        print("tip: Claude sees frames only; set [transcribe] enabled = true so it also knows what was said")
 
 
 def cmd_hide(args):
@@ -317,6 +358,13 @@ def cmd_run(args):
     cfg, conn = _open(args)
     if cfg.transcribe_enabled:
         cmd_transcribe(args)
+    if cfg.backend == "claude-code":
+        from . import claude_code
+
+        print(json.dumps(claude_code.estimate(cfg, conn), indent=2))
+        if args.yes or input("Analyse these with your Claude subscription? [y/N] ").strip().lower() == "y":
+            print(json.dumps(claude_code.run(cfg, conn), indent=2))
+        return
     if cfg.backend == "gemini":
         from . import gemini
 
@@ -332,6 +380,8 @@ def cmd_run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crag", description="Personal footage index + Obsidian life vault")
     p.add_argument("-c", "--config", help="path to contentrag.toml (default: ./contentrag.toml)")
+    p.add_argument("--backend", choices=["gemini", "claude-code", "claude"],
+                   help="use this AI backend for this command only (crag backend <name> switches for good)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
@@ -428,7 +478,15 @@ def main(argv=None):
     sp.add_argument("--page")
     sp.set_defaults(fn=cmd_style)
 
-    sub.add_parser("assets", help="show the assets folder (light leaks, SFX, LUTs, fonts)").set_defaults(fn=cmd_assets)
+    sp = sub.add_parser("assets", help="assets folder (light leaks, SFX, LUTs, fonts) + transition library")
+    sp.add_argument("action", nargs="?", choices=["show", "import", "transitions"], default="show",
+                    help="import <template.xml>: flash/leak + SFX recipes from a Premiere template")
+    sp.add_argument("xml", nargs="?")
+    sp.add_argument("--media", help="folder with the template's plates and SFX (default: next to the XML)")
+    sp.set_defaults(fn=cmd_assets)
+    sp = sub.add_parser("backend", help="show or switch the AI analysis backend: gemini | claude-code | claude")
+    sp.add_argument("name", nargs="?", choices=["gemini", "claude-code", "claude"])
+    sp.set_defaults(fn=cmd_backend)
 
     sp = sub.add_parser("organize", help="tidy footage folders: plan -> review -> apply (undo possible)")
     sp.add_argument("action", choices=["plan", "apply", "undo"])
@@ -468,6 +526,8 @@ def main(argv=None):
     sp.set_defaults(fn=cmd_run)
 
     args = p.parse_args(argv)
+    if args.backend:
+        os.environ["CRAG_BACKEND"] = args.backend
     args.fn(args)
 
 

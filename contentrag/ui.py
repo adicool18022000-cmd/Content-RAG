@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .config import Config
+from .config import BACKENDS, Config, set_backend
 from .db import connect, failures
 from .util import source_path
 
@@ -113,6 +113,10 @@ class Job:
 
             return transcribe(cfg, conn, log=log)
         if s in ("describe", "retry"):
+            if cfg.backend == "claude-code":
+                from . import claude_code
+
+                return claude_code.run(cfg, conn, retry=(s == "retry"), log=log, stop=self.stop)
             if cfg.backend == "gemini":
                 from . import gemini
 
@@ -149,8 +153,9 @@ def status(cfg: Config, job: Job) -> dict:
         out = {
             "library": str(cfg.library_dir),
             "backend": cfg.backend,
-            "model": cfg.gemini_model if cfg.backend == "gemini" else cfg.model,
-            "key_env": cfg.gemini_api_key_env if cfg.backend == "gemini" else "ANTHROPIC_API_KEY",
+            "backends": BACKENDS,
+            "model": {"gemini": cfg.gemini_model, "claude-code": cfg.cc_model}.get(cfg.backend, cfg.model),
+            "key_env": {"gemini": cfg.gemini_api_key_env, "claude": "ANTHROPIC_API_KEY"}.get(cfg.backend),
             "transcribe_enabled": cfg.transcribe_enabled,
             "roots": [{"name": r.name, "path": str(r.path), "kind": r.kind, "mounted": r.mounted} for r in cfg.roots],
             "media": {
@@ -177,7 +182,14 @@ def status(cfg: Config, job: Job) -> dict:
         out["autopilot"] = {**{k: ap.get(k) for k in ("status", "phase", "round", "started_at", "updated_at",
                                                        "waiting_until", "message", "deadline")},
                             "progress": eta(cfg, conn, ap)}
-        out["key_present"] = bool(os.environ.get(out["key_env"]))
+        if cfg.backend == "claude-code":  # subscription login instead of a key
+            from . import claude_code
+
+            st = claude_code.auth_status()
+            out["key_present"] = st["logged_in"]
+            out["login"] = st
+        else:
+            out["key_present"] = bool(os.environ.get(out["key_env"]))
         if cfg.backend == "gemini":
             from . import gemini
 
@@ -268,6 +280,10 @@ def make_handler(cfg: Config, job: Job):
                 if url.path == "/api/estimate":
                     conn = connect(cfg.db_path)
                     try:
+                        if cfg.backend == "claude-code":
+                            from . import claude_code
+
+                            return self._json(claude_code.estimate(cfg, conn))
                         if cfg.backend == "gemini":
                             from . import gemini
 
@@ -278,6 +294,8 @@ def make_handler(cfg: Config, job: Job):
                     finally:
                         conn.close()
                 if url.path == "/api/models":
+                    if cfg.backend == "claude-code":
+                        return self._json({"models": ["opus", "sonnet", "haiku"], "configured": cfg.cc_model})
                     from . import gemini
 
                     return self._json({"models": gemini.list_models(cfg), "configured": cfg.gemini_model})
@@ -340,6 +358,19 @@ def make_handler(cfg: Config, job: Job):
                     job.params = {"ids": ids, "name": str(body.get("name") or "selects")[:60]}
                 ok, msg = job.start(step)
                 return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
+            if url.path == "/api/backend":
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                name = body.get("backend")
+                if name not in BACKENDS:
+                    return self._json({"error": "unknown backend"}, 400)
+                from .autopilot import lock_held
+
+                if job.running or lock_held(cfg):
+                    return self._json({"error": "stop the running job before switching"}, 409)
+                if cfg.source:
+                    set_backend(cfg.source, name)  # remembered for the next start / terminal runs
+                cfg.backend = name
+                return self._json({"ok": True, "backend": name})
             if url.path == "/api/people":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
