@@ -52,6 +52,7 @@ def scan(cfg: Config, conn, log=print) -> dict:
             log(f"[scan] {root.name}: not mounted at {root.path}, skipping")
             continue
         log(f"[scan] {root.name}: {root.path}")
+        last_report = 0
         for path, kind in iter_media(root.path, library, root.skip):
             rel = path.relative_to(root.path).as_posix()
             try:
@@ -96,6 +97,11 @@ def scan(cfg: Config, conn, log=print) -> dict:
                     break
             if (stats["new"] + stats["duplicate"]) % 200 == 0:
                 conn.commit()
+            seen = stats["new"] + stats["duplicate"] + stats["known"] + stats["failed"]
+            if seen and seen % 250 == 0 and seen != last_report:
+                last_report = seen
+                log(f"[scan]   {seen} files so far: {stats['new']} new, {stats['duplicate']} duplicates, "
+                    f"{stats['known']} already known - now in {Path(rel).parent}")
         conn.commit()
     if stats["still_copying"]:
         log(f"[scan] {stats['still_copying']} files changed in the last {SETTLE_SECONDS // 60} min "
