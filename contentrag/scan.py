@@ -17,7 +17,8 @@ MIN_VIDEO_SECONDS = 1.5
 LIVE_PHOTO_MAX_SECONDS = 4.0
 
 SKIP_DIRS = {".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems", "@eaDir", "$RECYCLE.BIN",
-             "System Volume Information", "Recovered files"}
+             "System Volume Information", "Recovered files",
+             "THMBNL", "SUB", ".thumbnails", "Thumbnails"}  # camera thumbnails/proxies, phone thumbnail caches
 
 
 def iter_media(root: Path, exclude: Path | None, skip: list[str] | tuple = ()):
@@ -108,7 +109,7 @@ def scan(cfg: Config, conn, log=print) -> dict:
             "(still copying?) - they will be picked up by the next scan")
     from .collections import backfill_collections
 
-    backfill_collections(conn)
+    backfill_collections(conn, full=True)
     stats["removed"] = prune_missing(cfg, conn, log)
     stats["skipped"] = mark_skips(conn)
     geocode(conn, log)

@@ -1071,3 +1071,15 @@ def test_organize_groups_dumps_by_month_and_trip():
             {"root": "t7", "relpath": "College stuffs/Home Summer'23/IMG_1.jpg"}]
     keep = _keeper(locs, collection_of, {"College stuffs / all pics 4 years"})
     assert "Home Summer" in keep["relpath"]
+
+
+def test_camera_and_phone_container_folders():
+    from contentrag.collections import collection_of
+    from contentrag.scan import SKIP_DIRS
+
+    assert collection_of("DLSR college end/M4ROOT/CLIP/C0001.MP4") == "DLSR college end"
+    assert collection_of("Disk D/mobile files/x.jpg") is None
+    assert collection_of("Disk D/iPhone files/x.mov") is None
+    assert collection_of("Disk D/new photo/x.jpg") is None
+    assert collection_of("College stuffs/Kedarkantha Trek/a.jpg") == "College stuffs / Kedarkantha Trek"
+    assert "THMBNL" in SKIP_DIRS  # Sony thumbnails are never indexed

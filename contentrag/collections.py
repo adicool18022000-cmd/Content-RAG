@@ -15,6 +15,9 @@ _GENERIC = {
     "whatsapp", "whatsapp video", "whatsapp images", "whatsapp video sent", "sent", "private", "screenshots",
     "screen recordings", "archive", "brand_broll", "brand broll", "content", "temp", "tmp", "live photos",
     "snapchat", "instagram", "telegram", "airdrop", "icloud photos",
+    "mobile files", "mobile", "phone files", "iphone files", "android files", "internal", "internal storage",
+    "internal shared storage", "sdcard", "new photo", "new photos", "new video", "new videos", "m4root", "clip",
+    "clips", "avchd", "bdmv", "stream", "private", "dcim", "media files", "camera uploads",
     "ssd", "hdd", "external", "external drive", "hard disk", "hard drive", "pendrive", "usb", "sd card", "memory card",
 }
 _GENERIC_RE = re.compile(
@@ -44,11 +47,13 @@ def collection_of(relpath: str) -> str | None:
     return " / ".join(parts) or None
 
 
-def backfill_collections(conn) -> None:
-    rows = conn.execute("SELECT id, relpath FROM media WHERE collection IS NULL").fetchall()
+def backfill_collections(conn, full: bool = False) -> None:
+    """Fill in missing collections; full=True (on scan) recomputes all, so better naming rules reach old items."""
+    rows = conn.execute("SELECT id, relpath, collection FROM media"
+                        + ("" if full else " WHERE collection IS NULL")).fetchall()
     for r in rows:
         c = collection_of(r["relpath"])
-        if c:
+        if c != r["collection"]:
             conn.execute("UPDATE media SET collection=? WHERE id=?", (c, r["id"]))
 
 
