@@ -1083,3 +1083,24 @@ def test_camera_and_phone_container_folders():
     assert collection_of("Disk D/new photo/x.jpg") is None
     assert collection_of("College stuffs/Kedarkantha Trek/a.jpg") == "College stuffs / Kedarkantha Trek"
     assert "THMBNL" in SKIP_DIRS  # Sony thumbnails are never indexed
+
+
+def test_photo_model_separate(env, monkeypatch):
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_photo_model = "gemini-3.5-flash-lite"
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    e = gemini.estimate(cfg, conn)
+    assert e["photo_model"] == "gemini-3.5-flash-lite" and e["photo_requests"] >= 1 and e["video_requests"] >= 1
+    used = []
+    real = gemini._call
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
+    monkeypatch.setattr(gemini, "_call", lambda g, c, contents, schema, model=None:
+                        (used.append(model or c.gemini_model), real(g, c, contents, schema, model))[1])
+    gemini.run(cfg, conn, log=lambda *_: None)
+    assert "gemini-3.5-flash-lite" in used and cfg.gemini_model in used
+    models = {r["kind"]: r["model"] for r in conn.execute("SELECT kind, model FROM requests")}
+    assert models["photos"] == "gemini-3.5-flash-lite" and models["video"] == cfg.gemini_model

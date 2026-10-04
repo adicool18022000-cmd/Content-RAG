@@ -61,10 +61,12 @@ def backend_problems(cfg: Config, log=print) -> list[str]:
 
             try:
                 models = gemini.list_models(cfg)
-                if cfg.gemini_model not in models:
-                    flash = [m for m in models if "flash" in m][:8]
-                    problems.append(f"Gemini model '{cfg.gemini_model}' isn't available to this key; "
-                                    f"set [gemini] model to one of: {', '.join(flash)}")
+                for key, name in (("model", cfg.gemini_model), ("photo_model", cfg.photo_model)):
+                    if name not in models:
+                        flash = [m for m in models if "flash" in m][:8]
+                        problems.append(f"Gemini model '{name}' isn't available to this key; "
+                                        f"set [gemini] {key} to one of: {', '.join(flash)}")
+                        break
             except Exception as e:  # offline right now: not fatal, the run waits for the network
                 if "network" in str(e).lower() or "connect" in str(e).lower():
                     log(f"[autopilot] couldn't reach Gemini yet ({e}); will keep trying")

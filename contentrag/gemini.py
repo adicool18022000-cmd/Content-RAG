@@ -166,7 +166,7 @@ def _explain(e) -> GeminiError:
     return GeminiError(f"Gemini {code} {status}: {msg}{hint}", code)
 
 
-def _call(gclient, cfg: Config, contents, schema: dict) -> tuple[dict | None, str, dict]:
+def _call(gclient, cfg: Config, contents, schema: dict, model: str | None = None) -> tuple[dict | None, str, dict]:
     """Returns (data, status, usage); usage["error"] explains a non-'done' status.
     Retries rate limits and server errors with backoff, then raises GeminiError."""
     from google.genai import errors
@@ -174,7 +174,7 @@ def _call(gclient, cfg: Config, contents, schema: dict) -> tuple[dict | None, st
     delay = 5.0
     for attempt in range(5):
         try:
-            resp = gclient.models.generate_content(model=cfg.gemini_model, contents=contents,
+            resp = gclient.models.generate_content(model=model or cfg.gemini_model, contents=contents,
                                                    config=_config(cfg, schema))
             break
         except errors.APIError as e:
@@ -289,7 +289,7 @@ def _photo_job(gclient, cfg: Config, spec: dict) -> tuple[dict | None, str, dict
         contents.append(f"Photo {i}: {p['label']}")
         contents.append(types.Part.from_bytes(data=p["path"].read_bytes(), mime_type="image/jpeg"))
     contents.append(f"Describe each of the {len(spec['photos'])} photos.")
-    return _call(gclient, cfg, contents, PHOTO_SCHEMA)
+    return _call(gclient, cfg, contents, PHOTO_SCHEMA, model=cfg.photo_model)
 
 
 # ------------------------------------------------------------------ planning (main thread)
@@ -355,32 +355,41 @@ def _shift(data: dict, offset: float, length: float) -> dict:
 
 def estimate(cfg: Config, conn) -> dict:
     plan_requests(cfg, conn)
-    seconds = photos = n = 0
+    seconds = photos = 0
+    n_video = n_photo = 0.0
     for req in conn.execute("SELECT * FROM requests WHERE status IN ('pending','error')"):
-        n += 1
         payload = json.loads(req["payload"])
         if req["kind"] == "video":
+            n_video += 1
             m = conn.execute("SELECT duration FROM media WHERE id=?", (payload["media_id"],)).fetchone()
             seconds += max(0.0, min(cfg.window_seconds, (m["duration"] or 0) - payload["window"] * cfg.window_seconds))
         else:
+            n_photo += 1
             photos += len(payload["media_ids"])
     # files not prepared yet (no requests until `prep` has run) are estimated from their length
     for m in conn.execute("SELECT kind, duration FROM media WHERE prepped=0 AND described=0 AND skip_reason IS NULL "
                           "AND coalesce(attempts,0) < ?", (MAX_ATTEMPTS,)):
         if m["kind"] == "video":
             seconds += m["duration"] or 0
-            n += max(1, math.ceil((m["duration"] or 0) / cfg.window_seconds))
+            n_video += max(1, math.ceil((m["duration"] or 0) / cfg.window_seconds))
         else:
             photos += 1
-            n += 1 / PHOTOS_PER_REQUEST
-    n = int(round(n))
+            n_photo += 1 / PHOTOS_PER_REQUEST
+    n_video, n_photo = int(round(n_video)), int(round(n_photo))
     tps = TOKENS_PER_SECOND.get(cfg.gemini_resolution, 100) * cfg.gemini_fps + 32  # + audio
-    in_tok = seconds * tps + n * 900 + photos * 260
-    out_tok = seconds / 8 * 170 + seconds * 4 + n * 600 + photos * 200  # moments + transcript + thinking
-    pin, pout = PRICES.get(cfg.gemini_model, PRICES["gemini-3.5-flash"])
-    return {"requests": n, "model": cfg.gemini_model, "video_hours": round(seconds / 3600, 1), "photos": photos,
-            "input_tokens": int(in_tok), "output_tokens": int(out_tok),
-            "usd": round((in_tok * pin + out_tok * pout) / 1e6, 2)}
+    v_in = seconds * tps + n_video * 900
+    v_out = seconds / 8 * 170 + seconds * 4 + n_video * 600  # moments + transcript + thinking
+    p_in = n_photo * 900 + photos * 260
+    p_out = n_photo * 600 + photos * 200
+    vin, vout = PRICES.get(cfg.gemini_model, PRICES["gemini-3.5-flash"])
+    pin, pout = PRICES.get(cfg.photo_model, PRICES["gemini-3.5-flash"])
+    out = {"requests": n_video + n_photo, "model": cfg.gemini_model, "video_hours": round(seconds / 3600, 1),
+           "photos": photos, "video_requests": n_video, "photo_requests": n_photo,
+           "input_tokens": int(v_in + p_in), "output_tokens": int(v_out + p_out),
+           "usd": round((v_in * vin + v_out * vout + p_in * pin + p_out * pout) / 1e6, 2)}
+    if cfg.photo_model != cfg.gemini_model:
+        out["photo_model"] = cfg.photo_model
+    return out
 
 
 def spent(cfg: Config, conn) -> dict:
@@ -415,7 +424,9 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
         log(f"[gemini] spending cap of ${cfg.gemini_budget_usd:g} already reached; nothing sent")
         return {**stats, "budget": True}
     gclient = client(cfg)
-    log(f"[gemini] {len(specs)} requests with {cfg.gemini_model}, {cfg.gemini_workers} at a time")
+    log(f"[gemini] {len(specs)} requests with {cfg.gemini_model}"
+        + (f" (photos: {cfg.photo_model})" if cfg.photo_model != cfg.gemini_model else "")
+        + f", {cfg.gemini_workers} at a time")
     with tempfile.TemporaryDirectory(prefix="crag-") as tmpdir, \
             ThreadPoolExecutor(max_workers=cfg.gemini_workers) as pool:
         tmp = Path(tmpdir)
@@ -474,7 +485,8 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
                     err = "drive was unplugged"
             conn.execute("UPDATE requests SET model=?, in_tokens=coalesce(in_tokens,0)+?, "
                          "out_tokens=coalesce(out_tokens,0)+? WHERE custom_id=?",
-                         (cfg.gemini_model, usage["in"], usage["out"], cid))
+                         (cfg.photo_model if spec["kind"] != "video" else cfg.gemini_model,
+                          usage["in"], usage["out"], cid))
             if status == "done":
                 try:
                     _store(cfg, conn, spec, data)

@@ -37,6 +37,7 @@ class Config:
     transcribe_enabled: bool = True
     backend: str = "gemini"  # gemini | claude (API key) | claude-code (Claude subscription)
     gemini_model: str = "gemini-3.5-flash"
+    gemini_photo_model: str = ""  # empty = same as gemini_model
     gemini_api_key_env: str = "GEMINI_API_KEY"
     gemini_resolution: str = "low"  # low | medium | high
     gemini_thinking: str = "low"  # minimal | low | medium | high
@@ -58,6 +59,10 @@ class Config:
     faces_enabled: bool = True
     embed_model: str = "BAAI/bge-m3"
     source: Path | None = field(default=None, repr=False)
+
+    @property
+    def photo_model(self) -> str:
+        return self.gemini_photo_model or self.gemini_model
 
     @property
     def db_path(self) -> Path:
@@ -129,6 +134,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         transcribe_enabled=bool(t.get("enabled", Config.transcribe_enabled)),
         backend=backend,
         gemini_model=g.get("model", Config.gemini_model),
+        gemini_photo_model=g.get("photo_model", Config.gemini_photo_model),
         gemini_api_key_env=g.get("api_key_env", Config.gemini_api_key_env),
         gemini_resolution=g.get("media_resolution", Config.gemini_resolution),
         gemini_thinking=g.get("thinking_level", Config.gemini_thinking),

@@ -78,6 +78,10 @@ workers = 2
 # a third as much. The dashboard's "Check key" button lists the model names
 # your key can use.
 model = "gemini-3.5-flash"
+# Photos can use a cheaper model with its own daily request allowance (each model has
+# a separate requests-per-day limit, e.g. 10K for Flash, 150K for Flash-Lite).
+# Empty = same as model.
+photo_model = "gemini-3.5-flash-lite"
 # Environment variable that holds the key (never put the key in this file
 # if you share it).
 api_key_env = "GEMINI_API_KEY"
