@@ -9,6 +9,7 @@ the Claude backend, so search and the vault work the same way.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from .config import Config
 from .db import MAX_ATTEMPTS
-from .describe import PHOTO_SCHEMA, SYSTEM, VIDEO_SCHEMA, plan_requests, store_result
+from .describe import PHOTO_SCHEMA, PHOTOS_PER_REQUEST, SYSTEM, VIDEO_SCHEMA, plan_requests, store_result
 from .util import fmt_ts, source_path
 
 INLINE_LIMIT = 8 * 1024 * 1024  # bigger proxies go through the Files API (more reliable for long clips)
@@ -363,6 +364,16 @@ def estimate(cfg: Config, conn) -> dict:
             seconds += max(0.0, min(cfg.window_seconds, (m["duration"] or 0) - payload["window"] * cfg.window_seconds))
         else:
             photos += len(payload["media_ids"])
+    # files not prepared yet (no requests until `prep` has run) are estimated from their length
+    for m in conn.execute("SELECT kind, duration FROM media WHERE prepped=0 AND described=0 AND skip_reason IS NULL "
+                          "AND coalesce(attempts,0) < ?", (MAX_ATTEMPTS,)):
+        if m["kind"] == "video":
+            seconds += m["duration"] or 0
+            n += max(1, math.ceil((m["duration"] or 0) / cfg.window_seconds))
+        else:
+            photos += 1
+            n += 1 / PHOTOS_PER_REQUEST
+    n = int(round(n))
     tps = TOKENS_PER_SECOND.get(cfg.gemini_resolution, 100) * cfg.gemini_fps + 32  # + audio
     in_tok = seconds * tps + n * 900 + photos * 260
     out_tok = seconds / 8 * 170 + seconds * 4 + n * 600 + photos * 200  # moments + transcript + thinking

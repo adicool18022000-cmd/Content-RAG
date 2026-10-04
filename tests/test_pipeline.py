@@ -1028,3 +1028,12 @@ def test_folders_report_and_skip_added_later(tmp_path, monkeypatch, capsys):
     cfg = load_config(cfg_path)
     rows = [r["relpath"] for r in connect(cfg.db_path).execute("SELECT relpath FROM locations")]
     assert rows == ["Phone/DCIM/a.mp4"]  # skipped later -> dropped from the index on the next scan
+
+
+def test_estimate_before_prep(env):
+    from contentrag import gemini
+
+    cfg, conn = env
+    scan(cfg, conn, log=lambda *_: None)
+    e = gemini.estimate(cfg, conn)  # nothing prepped yet: still a real figure, from the file lengths
+    assert e["requests"] > 0 and e["input_tokens"] > 0 and e["photos"] >= 1 and e["usd"] > 0
