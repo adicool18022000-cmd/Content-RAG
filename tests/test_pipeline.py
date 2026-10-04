@@ -1037,3 +1037,37 @@ def test_estimate_before_prep(env):
     scan(cfg, conn, log=lambda *_: None)
     e = gemini.estimate(cfg, conn)  # nothing prepped yet: still a real figure, from the file lengths
     assert e["requests"] > 0 and e["input_tokens"] > 0 and e["photos"] >= 1 and e["usd"] > 0
+
+
+def test_organize_groups_dumps_by_month_and_trip():
+    from contentrag.organize import _group_loose, _keeper
+
+    def m(i, when, place=None):
+        return {"id": f"m{i}", "taken_at": when, "place": place, "title": None}
+
+    items = []
+    i = 0
+    for month in ("2025-05", "2025-06", "2025-07", "2025-08"):  # home: footage in many months
+        for d in ("03", "11", "24"):
+            i += 1
+            items.append(m(i, f"{month}-{d}T10:00:00", "Gurgaon, Haryana, IN"))
+    i += 1
+    items.append(m(i, "2025-07-24T09:00:00"))  # screenshot without GPS: joins its month
+    for day, city, n in (("08", "Danapur", 5), ("09", "Ara", 3), ("09", "Danapur", 6), ("10", "Khagaul", 2)):
+        for _ in range(n):  # one Bihar trip over three days and several towns
+            i += 1
+            items.append(m(i, f"2025-08-{day}T12:00:00", f"{city}, Bihar, IN"))
+    folders = _group_loose(items)
+    names = set(folders.values())
+    assert "2025/2025-08-08 Danapur trip" in names
+    assert sum(1 for f in folders.values() if f == "2025/2025-08-08 Danapur trip") == 16
+    assert folders["m13"] == "2025/2025-07 Gurgaon"  # no-GPS file in the July folder
+    assert "2025/2025-05 Gurgaon" in names and len(names) == 5  # 4 months + 1 trip, no per-day folders
+
+    # duplicates: the named folder keeps the file, not the "all pics" dump
+    from contentrag.collections import collection_of
+
+    locs = [{"root": "t7", "relpath": "College stuffs/all pics 4 years/IMG_1.JPG"},
+            {"root": "t7", "relpath": "College stuffs/Home Summer'23/IMG_1.jpg"}]
+    keep = _keeper(locs, collection_of, {"College stuffs / all pics 4 years"})
+    assert "Home Summer" in keep["relpath"]

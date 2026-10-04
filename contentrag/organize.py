@@ -7,7 +7,8 @@ Always three steps, and nothing is ever deleted:
 
 Target layout inside each footage folder (brand B-roll folders are left alone):
     2023/2023-05 Summer Stay Hostel/...        your own folder names are kept (date prefix added)
-    2025/2025-11-14 Phuket - Fire show night/  big mixed folders (phone dumps) are split by trip/day
+    2025/2025-07 Gurgaon/                      phone dumps: one folder per month at home...
+    2025/2025-11-14 Phuket trip/               ...and one per trip away from home
     _Duplicates/<old path>                     extra copies of files that exist elsewhere
 The index follows the moves, so nothing has to be analysed again.
 """
@@ -24,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config
-from .vault import _city, _dt, cluster_events
+from .vault import _city, _dt
 
 DUP_DIR = "_Duplicates"
 SIDECARS = (".aae", ".xmp", ".thm", ".srt", ".lrf")
@@ -37,11 +38,13 @@ def _clean(name: str, n: int = 70) -> str:
     return re.sub(r"\s+", " ", _BAD.sub(" ", name or "")).strip()[:n].strip() or "Untitled"
 
 
-def _keeper(locs: list, collection_by_loc) -> dict:
-    """Which copy of a duplicated file stays: the one in the most meaningful folder."""
+def _keeper(locs: list, collection_by_loc, dump_collections: set | frozenset = frozenset()) -> dict:
+    """Which copy of a duplicated file stays: the one in the most meaningful folder. A named folder
+    ("Home Summer'23") beats a dump of everything ("all pics 4 years", phone backups)."""
     def score(loc):
         coll = collection_by_loc(loc["relpath"]) or ""
-        return (bool(coll), -bool(_BACKUPISH.search(loc["relpath"])), len(coll), -len(loc["relpath"]))
+        return (bool(coll) and coll not in dump_collections, bool(coll), -bool(_BACKUPISH.search(loc["relpath"])),
+                len(coll), -len(loc["relpath"]))
     return max(locs, key=score)
 
 
@@ -53,13 +56,62 @@ def _is_dump(items: list) -> bool:
     return (max(dts) - min(dts)).days > DUMP_DAYS and len(cities) > 1
 
 
-def _event_folder(ev: list) -> str:
-    first = ev[0]
-    places = Counter(_city(m["place"]) for m in ev if m["place"])
-    city = places.most_common(1)[0][0] if places else ""
-    titles = [m["title"] for m in ev if m["title"]]
-    label = " - ".join(x for x in (city, titles[0] if titles else "") if x)
-    return _clean(f"{first['taken_at'][:10]} {label}".strip())
+TRIP_GAP_DAYS = 2       # days without footage that still count as the same trip
+TRIP_MIN_FILES = 8      # fewer files away from home stay in the month folder
+HOME_MONTHS = 3         # a city with footage in this many different months is "home", not a trip
+
+
+def _group_loose(items: list) -> dict[str, str]:
+    """Folders for files without a meaningful folder of their own (phone dumps, DCIM, iCloud exports):
+    one folder per month at home ("2025-07 Gurgaon"), one per trip away ("2025-08-08 Danapur trip").
+    Files without GPS or date details simply join their month."""
+    months_by_city: dict[str, set] = {}
+    for m in items:
+        c = _city(m["place"])
+        if c:
+            months_by_city.setdefault(c, set()).add(m["taken_at"][:7])
+    home = {c for c, months in months_by_city.items() if len(months) >= HOME_MONTHS}
+
+    # trips: runs of days whose footage is mostly in non-home cities
+    days: dict[str, list] = {}
+    for m in items:
+        days.setdefault(m["taken_at"][:10], []).append(m)
+    away_day = {}
+    for day, ms in days.items():
+        cities = Counter(_city(m["place"]) for m in ms if m["place"])
+        top = cities.most_common(1)[0][0] if cities else None
+        if top and top not in home:
+            away_day[day] = top
+    folder: dict[str, str] = {}
+    run: list[str] = []
+
+    def close_run():
+        files = [m for d in run for m in days[d]]
+        if len(files) >= TRIP_MIN_FILES:
+            city = Counter(away_day[d] for d in run for _ in days[d]).most_common(1)[0][0]
+            name = _clean(f"{run[0]} {city} trip")
+            for m in files:
+                folder[m["id"]] = f"{run[0][:4]}/{name}"
+
+    for day in sorted(away_day):
+        if run and (_dt(day) - _dt(run[-1])).days > TRIP_GAP_DAYS + 1:
+            close_run()
+            run = []
+        run.append(day)
+    if run:
+        close_run()
+
+    # everything else: one folder per month, named after its main city
+    by_month: dict[str, list] = {}
+    for m in items:
+        if m["id"] not in folder:
+            by_month.setdefault(m["taken_at"][:7], []).append(m)
+    for month, ms in by_month.items():
+        cities = Counter(_city(m["place"]) for m in ms if m["place"])
+        name = _clean(f"{month} {cities.most_common(1)[0][0]}" if cities else month)
+        for m in ms:
+            folder[m["id"]] = f"{month[:4]}/{name}"
+    return folder
 
 
 def plan(cfg: Config, conn, log=print) -> dict:
@@ -82,10 +134,20 @@ def plan(cfg: Config, conn, log=print) -> dict:
     for loc in conn.execute("SELECT root, relpath, media_id FROM locations ORDER BY root, relpath"):
         locs_by_media.setdefault(loc["media_id"], []).append(dict(loc))
 
+    # folders that are dumps of everything (years, many cities) rather than one trip or period
+    coll_items: dict[str, dict] = {}
+    for mid, locs in locs_by_media.items():
+        for loc in locs:
+            coll = collection_of(loc["relpath"])
+            if coll and mid in media:
+                coll_items.setdefault(coll, {})[mid] = media[mid]
+    dumps = {c for c, items in coll_items.items()
+             if _is_dump(sorted(items.values(), key=lambda m: m["taken_at"] or ""))}
+
     # 1. duplicates: keep the best-placed copy; the others go to _Duplicates in their own drive
     keepers: dict[str, dict] = {}
     for mid, locs in locs_by_media.items():
-        keep = _keeper(locs, collection_of) if len(locs) > 1 else locs[0]
+        keep = _keeper(locs, collection_of, dumps) if len(locs) > 1 else locs[0]
         keepers[mid] = keep
         for loc in locs:
             if loc is keep or loc["root"] not in archive_roots or loc["relpath"].startswith(DUP_DIR + "/"):
@@ -112,11 +174,7 @@ def plan(cfg: Config, conn, log=print) -> dict:
         name = _clean(f"{items[0]['taken_at'][:7]} {coll.replace(' / ', ' - ')}")
         for m in items:
             folder_of[m["id"]] = f"{items[0]['taken_at'][:4]}/{name}"
-    loose.sort(key=lambda m: m["taken_at"])
-    for ev in cluster_events(loose):
-        name = _event_folder(ev)
-        for m in ev:
-            folder_of[m["id"]] = f"{ev[0]['taken_at'][:4]}/{name}"
+    folder_of.update(_group_loose(loose))
     for mid, folder in folder_of.items():
         keep = keepers[mid]
         new_rel = f"{folder}/{Path(keep['relpath']).name}"
