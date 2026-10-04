@@ -15,10 +15,12 @@ _GENERIC = {
     "whatsapp", "whatsapp video", "whatsapp images", "whatsapp video sent", "sent", "private", "screenshots",
     "screen recordings", "archive", "brand_broll", "brand broll", "content", "temp", "tmp", "live photos",
     "snapchat", "instagram", "telegram", "airdrop", "icloud photos",
+    "ssd", "hdd", "external", "external drive", "hard disk", "hard drive", "pendrive", "usb", "sd card", "memory card",
 }
 _GENERIC_RE = re.compile(
     r"^(\d{3}apple|\d{3}[a-z]{4,5}|\d{3,4}|\d{4}[-_ .]\d{1,2}([-_ .]\d{1,2})?|img|vid|dsc|new folder \(\d+\)|"
-    r"copy of .*|.* copy|camera\d*|dcim\d*|\d+_?(photos|videos)?)$")
+    r"copy of .*|.* copy|camera\d*|dcim\d*|\d+_?(photos|videos)?|(local )?(disk|drive|volume) ?[a-z0-9]?|"
+    r"[a-z] ?drive|(ssd|hdd) ?\d*)$")
 
 
 def is_generic(name: str) -> bool:

@@ -980,3 +980,28 @@ def test_transition_library_from_premiere_template(env, monkeypatch, tmp_path):
         spans = sorted((int(c.findtext("start")), int(c.findtext("end"))) for c in track.findall("clipitem"))
         assert all(a[1] <= b[0] for a, b in zip(spans, spans[1:]))
     assert Path(out["mp4"]).exists()
+
+
+def test_root_skip_folders_and_drive_names(tmp_path, monkeypatch):
+    from contentrag import scan as scan_mod
+    from contentrag.collections import collection_of
+
+    monkeypatch.setattr(scan_mod, "SETTLE_SECONDS", 0)
+    drive = tmp_path / "T7"
+    _video(drive / "Disk D" / "Goa trip" / "a.mp4", "320x180", 2, {})
+    _video(drive / "Downloads" / "movie.mp4", "320x180", 2, {})
+    _video(drive / "System Volume Information" / "x.mp4", "320x180", 2, {})
+    cfg_path = tmp_path / "contentrag.toml"
+    cfg_path.write_text(f"""
+library_dir = "{drive / 'ContentLibrary'}"
+[[roots]]
+name = "t7"
+path = "{drive}"
+skip = ["Downloads"]
+""")
+    cfg = load_config(cfg_path)
+    conn = connect(cfg.db_path)
+    scan(cfg, conn, log=lambda *_: None)
+    rows = [r["relpath"] for r in conn.execute("SELECT relpath FROM locations")]
+    assert rows == ["Disk D/Goa trip/a.mp4"]  # library inside the drive, Downloads and system folders skipped
+    assert collection_of(rows[0]) == "Goa trip"  # "Disk D" is a drive name, not a collection

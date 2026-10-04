@@ -20,6 +20,7 @@ class Root:
     name: str
     path: Path
     kind: str = "archive"  # "archive" or "brand"
+    skip: list[str] = field(default_factory=list)  # sub-folders (relative to path) never indexed
 
     @property
     def mounted(self) -> bool:
@@ -99,7 +100,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         raw = tomllib.load(f)
 
     roots = [
-        Root(name=r["name"], path=Path(r["path"]).expanduser(), kind=r.get("kind", "archive"))
+        Root(name=r["name"], path=Path(r["path"]).expanduser(), kind=r.get("kind", "archive"),
+             skip=[str(x).strip("/") for x in r.get("skip", [])])
         for r in raw.get("roots", [])
     ]
     names = [r.name for r in roots]

@@ -92,18 +92,22 @@ def pipeline_lock(cfg: Config):
     """Exclusive per-library lock. Released automatically if the process dies."""
     cfg.library_dir.mkdir(parents=True, exist_ok=True)
     f = open(cfg.library_dir / ".crag.lock", "w")
+    locked = True
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         f.close()
         raise Busy("Another crag run is already working on this library (dashboard or terminal). "
                    "Wait for it to finish or stop it first.")
+    except OSError:  # some external-drive formats (exFAT/FAT) don't support locks: run without one
+        locked = False
     try:
         f.write(str(os.getpid()))
         f.flush()
         yield
     finally:
-        fcntl.flock(f, fcntl.LOCK_UN)
+        if locked:
+            fcntl.flock(f, fcntl.LOCK_UN)
         f.close()
 
 

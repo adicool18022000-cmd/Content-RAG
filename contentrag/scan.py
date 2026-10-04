@@ -16,16 +16,20 @@ MIN_VIDEO_SECONDS = 1.5
 # iPhone Live Photos store a ~3 s video next to the photo with the same name.
 LIVE_PHOTO_MAX_SECONDS = 4.0
 
-SKIP_DIRS = {".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems", "@eaDir", "$RECYCLE.BIN"}
+SKIP_DIRS = {".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems", "@eaDir", "$RECYCLE.BIN",
+             "System Volume Information", "Recovered files"}
 
 
-def iter_media(root: Path, exclude: Path | None):
+def iter_media(root: Path, exclude: Path | None, skip: list[str] | tuple = ()):
+    """Media files under root, minus system folders, the library itself and the root's `skip` folders."""
+    skipped = {(root / s).resolve() for s in skip}
     for dirpath, dirnames, filenames in os.walk(root):
         d = Path(dirpath)
         dirnames[:] = [
             n for n in dirnames
             if not n.startswith(".") and n not in SKIP_DIRS
             and not (exclude and (d / n).resolve() == exclude)
+            and (d / n).resolve() not in skipped
             and not n.endswith((".prproj", ".fcpbundle", ".photoslibrary"))  # app bundles
         ]
         for name in filenames:
@@ -48,7 +52,7 @@ def scan(cfg: Config, conn, log=print) -> dict:
             log(f"[scan] {root.name}: not mounted at {root.path}, skipping")
             continue
         log(f"[scan] {root.name}: {root.path}")
-        for path, kind in iter_media(root.path, library):
+        for path, kind in iter_media(root.path, library, root.skip):
             rel = path.relative_to(root.path).as_posix()
             try:
                 st = path.stat()

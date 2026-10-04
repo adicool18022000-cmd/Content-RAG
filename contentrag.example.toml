@@ -17,6 +17,9 @@ timezone = "Asia/Kolkata"
 name = "ssd1-archive"
 path = "/Volumes/SSD1/Archive"
 kind = "archive"
+# Sub-folders of this root that are never indexed (relative to path), e.g. downloads
+# that aren't your own footage. System folders ($RECYCLE.BIN...) are always skipped.
+# skip = ["Downloads", "Software"]
 
 [[roots]]
 name = "ssd2-archive"
