@@ -268,6 +268,35 @@ def cmd_assets(args):
         print("\n".join(transitions.summary(cfg)) or "no transition library yet: crag assets import <template.xml>")
 
 
+def cmd_folders(args):
+    """What is in each folder (videos, photos, hours), to decide what to skip before paying for analysis."""
+    from collections import defaultdict
+
+    cfg, conn = _open(args)
+    agg = defaultdict(lambda: {"videos": 0, "photos": 0, "hours": 0.0})
+    seen = set()
+    for r in conn.execute("SELECT l.root, l.relpath, m.id, m.kind, coalesce(m.duration, 0) d FROM locations l "
+                          "JOIN media m ON m.id = l.media_id ORDER BY l.root, l.relpath"):
+        if r["id"] in seen:  # duplicates counted once, at their first copy
+            continue
+        seen.add(r["id"])
+        parts = r["relpath"].split("/")[:-1]
+        key = "/".join(parts[:args.depth]) or "(top level)"
+        if args.under:
+            if not r["relpath"].startswith(args.under.rstrip("/") + "/"):
+                continue
+            key = "/".join(parts[:len(args.under.strip("/").split("/")) + 1]) or args.under
+        a = agg[(r["root"], key)]
+        a["videos" if r["kind"] == "video" else "photos"] += 1
+        a["hours"] += r["d"] / 3600
+    rows = sorted(agg.items(), key=lambda kv: -(kv[1]["hours"] + kv[1]["photos"] / 3000))
+    print(f"{'hours':>7} {'videos':>7} {'photos':>7}  folder")
+    for (root, key), a in rows[:args.limit]:
+        print(f"{a['hours']:7.1f} {a['videos']:7} {a['photos']:7}  {key}" + (f"   [{root}]" if len(cfg.roots) > 1 else ""))
+    if len(rows) > args.limit:
+        print(f"... {len(rows) - args.limit} more (--limit {len(rows)})")
+
+
 def cmd_backend(args):
     """Show or switch the AI analysis backend (writes [describe] backend in contentrag.toml)."""
     from .config import BACKENDS, DEFAULT_CONFIG, set_backend
@@ -484,6 +513,11 @@ def main(argv=None):
     sp.add_argument("xml", nargs="?")
     sp.add_argument("--media", help="folder with the template's plates and SFX (default: next to the XML)")
     sp.set_defaults(fn=cmd_assets)
+    sp = sub.add_parser("folders", help="videos/photos/hours per folder, to choose what to skip")
+    sp.add_argument("--depth", type=int, default=2, help="folder levels to group by (default 2)")
+    sp.add_argument("--under", help="only this folder, one level deeper, e.g. 'Disk D/mobile files'")
+    sp.add_argument("--limit", type=int, default=60)
+    sp.set_defaults(fn=cmd_folders)
     sp = sub.add_parser("backend", help="show or switch the AI analysis backend: gemini | claude-code | claude")
     sp.add_argument("name", nargs="?", choices=["gemini", "claude-code", "claude"])
     sp.set_defaults(fn=cmd_backend)

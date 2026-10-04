@@ -122,8 +122,12 @@ def prune_missing(cfg: Config, conn, log=print) -> int:
     for root in cfg.roots:
         if not root.mounted:
             continue
+        skipped = tuple(s.rstrip("/") + "/" for s in root.skip)
         for loc in conn.execute("SELECT relpath FROM locations WHERE root=?", (root.name,)).fetchall():
-            if not (root.path / loc["relpath"]).exists():
+            # gone from the drive, or inside a folder that was added to `skip` later
+            if loc["relpath"].startswith(skipped) or any(
+                    part in SKIP_DIRS for part in loc["relpath"].split("/")[:-1]) \
+                    or not (root.path / loc["relpath"]).exists():
                 conn.execute("DELETE FROM locations WHERE root=? AND relpath=?", (root.name, loc["relpath"]))
                 gone += 1
     orphans = [r["id"] for r in conn.execute(
@@ -136,7 +140,7 @@ def prune_missing(cfg: Config, conn, log=print) -> int:
         conn.execute("DELETE FROM media WHERE id=?", (mid,))
     conn.commit()
     if orphans:
-        log(f"[scan] removed {len(orphans)} items whose files no longer exist")
+        log(f"[scan] removed {len(orphans)} items whose files no longer exist or are in skipped folders")
     return len(orphans)
 
 

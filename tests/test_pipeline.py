@@ -1005,3 +1005,26 @@ skip = ["Downloads"]
     rows = [r["relpath"] for r in conn.execute("SELECT relpath FROM locations")]
     assert rows == ["Disk D/Goa trip/a.mp4"]  # library inside the drive, Downloads and system folders skipped
     assert collection_of(rows[0]) == "Goa trip"  # "Disk D" is a drive name, not a collection
+
+
+def test_folders_report_and_skip_added_later(tmp_path, monkeypatch, capsys):
+    from contentrag import scan as scan_mod
+    from contentrag.cli import main
+
+    monkeypatch.setattr(scan_mod, "SETTLE_SECONDS", 0)
+    drive = tmp_path / "T7"
+    _video(drive / "Phone" / "DCIM" / "a.mp4", "320x180", 2, {})
+    _video(drive / "Phone" / "Download" / "song.mp4", "320x240", 3, {})
+    cfg_path = tmp_path / "contentrag.toml"
+    text = f'library_dir = "{drive / "lib"}"\n[[roots]]\nname = "t7"\npath = "{drive}"\n'
+    cfg_path.write_text(text)
+    main(["-c", str(cfg_path), "scan"])
+    capsys.readouterr()
+    main(["-c", str(cfg_path), "folders", "--under", "Phone"])
+    out = capsys.readouterr().out
+    assert "Phone/DCIM" in out and "Phone/Download" in out
+    cfg_path.write_text(text + 'skip = ["Phone/Download"]\n')
+    main(["-c", str(cfg_path), "scan"])
+    cfg = load_config(cfg_path)
+    rows = [r["relpath"] for r in connect(cfg.db_path).execute("SELECT relpath FROM locations")]
+    assert rows == ["Phone/DCIM/a.mp4"]  # skipped later -> dropped from the index on the next scan
