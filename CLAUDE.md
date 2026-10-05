@@ -23,7 +23,8 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   unplugged drive) must leave requests `pending` without using an attempt.
 - `crag pull m<id> ...` (`contentrag/pull.py`) cuts moments + `selects.json` + FCP7 `timeline.xml`.
 - Collections = the creator's folder names (`collections.py`); usage + hide list (`usage.py`);
-  local face grouping with OpenCV YuNet/SFace (`faces.py`), hidden people are removed by time
+  local face grouping with OpenCV YuNet/SFace (`faces.py`); a person = all face groups sharing a
+  name (groups are never merged; `split_person` re-separates one); hidden people are removed by time
   range, never by dropping whole clips.
 - Edit engine (`contentrag/edit/`): one `EditPlan` (plan.py) built by `talking.py` / `beat.py`,
   rendered by `render.py` (ffmpeg MP4, real Screen blend for plates) and `export.py` (Premiere FCP7 XML, AE JSX, HyperFrames,

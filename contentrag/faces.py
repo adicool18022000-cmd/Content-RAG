@@ -2,7 +2,7 @@
 
 1. `crag faces` finds faces in the frames `prep` already sampled and groups them into people.
 2. `crag people` lists the groups; you name them (`crag people name 7 Riya`; giving two groups
-   the same name merges them) and hide anyone who must never appear (`crag people hide Riya`).
+   the same name makes them one person, each group stays separate) and hide anyone who must never appear (`crag people hide Riya`).
 3. Hiding a person rescans every clip they appear in at 1 frame/second, so search, pull and
    edits can use the rest of those clips and skip exactly the parts where they're on screen.
 
@@ -192,24 +192,124 @@ def resolve_people(conn, ref: str) -> list[int]:
 
 
 def name_person(conn, pid: int, name: str) -> int:
-    """Name a group. If another group already has this name, merge into it. Returns the kept id."""
-    other = conn.execute("SELECT id, faces, centroid, hidden FROM people WHERE lower(name)=lower(?) AND id!=?",
-                         (name, pid)).fetchone()
-    if other is None:
-        conn.execute("UPDATE people SET name=? WHERE id=?", (name, pid))
-        conn.commit()
-        return pid
-    me = conn.execute("SELECT faces, centroid, hidden FROM people WHERE id=?", (pid,)).fetchone()
-    a, b = me["faces"] or 1, other["faces"] or 1
-    c = _emb(me["centroid"]) * a + _emb(other["centroid"]) * b
-    c = (c / (np.linalg.norm(c) or 1.0)).astype(np.float32)
-    conn.execute("UPDATE faces SET person_id=? WHERE person_id=?", (other["id"], pid))
-    conn.execute("UPDATE people SET faces=?, centroid=?, hidden=? WHERE id=?",
-                 (a + b, c.tobytes(), int(bool(me["hidden"] or other["hidden"])), other["id"]))
-    conn.execute("UPDATE hidden SET ref=? WHERE kind='person' AND ref=?", (str(other["id"]), str(pid)))
-    conn.execute("DELETE FROM people WHERE id=?", (pid,))
+    """Name (or with an empty name, un-name) one face group. Groups that share a name are one person,
+    but each group stays separate so a wrongly named one can be renamed later. If the person is
+    hidden, a group newly given that name is hidden too (privacy first)."""
+    name = (name or "").strip() or None
+    conn.execute("UPDATE people SET name=? WHERE id=?", (name, pid))
+    if name and conn.execute("SELECT 1 FROM people WHERE lower(name)=lower(?) AND id!=? AND hidden=1",
+                             (name, pid)).fetchone():
+        from .usage import hide
+
+        hide(conn, "person", str(pid), "same name as a hidden person")
     conn.commit()
-    return other["id"]
+    return pid
+
+
+SPLIT_MIN_FACES = 3      # smaller sub-groups are folded into the closest bigger one
+SPLIT_FOLD = 0.30        # ...if at least this similar, otherwise kept together as "other faces"
+
+
+def split_person(cfg: Config, conn, pid: int) -> list[int]:
+    """Re-group the faces of one group (e.g. several people that were merged under one name in an
+    older version) into separate groups again. Every new group keeps the name and hidden state, so
+    nothing changes until a group is renamed. Returns the group ids (the biggest keeps `pid`)."""
+    row = conn.execute("SELECT name, hidden FROM people WHERE id=?", (pid,)).fetchone()
+    if row is None:
+        return []
+    faces = conn.execute("SELECT id, emb FROM faces WHERE person_id=? ORDER BY coalesce(score,0) DESC",
+                         (pid,)).fetchall()
+    if len(faces) < 2 * SPLIT_MIN_FACES:
+        return [pid]
+    sums: list[np.ndarray] = []
+    members: list[list[int]] = []
+    cents = np.zeros((0, 0), np.float32)
+    for f in faces:  # best-quality faces first, so each group starts from a clear face
+        e = _emb(f["emb"])
+        if len(sums):
+            sims = cents @ e
+            k = int(np.argmax(sims))
+            if sims[k] >= SAME_PERSON:
+                sums[k] = sums[k] + e
+                members[k].append(f["id"])
+                cents[k] = sums[k] / (np.linalg.norm(sums[k]) or 1.0)
+                continue
+        sums.append(e.copy())
+        members.append([f["id"]])
+        cents = np.vstack([cents, e[None, :]]) if cents.size else e[None, :].copy()
+    big = [i for i, m in enumerate(members) if len(m) >= SPLIT_MIN_FACES]
+    if len(big) <= 1:
+        return [pid]
+    other: list[int] = []
+    for i, m in enumerate(members):
+        if i in big:
+            continue
+        sims = cents[big] @ cents[i]
+        j = int(np.argmax(sims))
+        (members[big[j]] if sims[j] >= SPLIT_FOLD else other).extend(m)
+    groups = sorted(([members[i], sums[i]] for i in big), key=lambda g: -len(g[0]))
+    if len(other) >= SPLIT_MIN_FACES:
+        groups.append([other, None])
+    elif other:
+        groups[0][0].extend(other)
+    ids = []
+    hidden_refs = {r["ref"] for r in conn.execute("SELECT ref FROM hidden WHERE kind='person'")}
+    for n, (face_ids, total) in enumerate(groups):
+        if total is None:
+            total = np.sum([_emb(r["emb"]) for r in conn.execute(
+                f"SELECT emb FROM faces WHERE id IN ({','.join('?' * len(face_ids))})", face_ids)], axis=0)
+        c = (total / (np.linalg.norm(total) or 1.0)).astype(np.float32)
+        if n == 0:
+            gid = pid
+            conn.execute("UPDATE people SET faces=?, centroid=? WHERE id=?", (len(face_ids), c.tobytes(), gid))
+        else:
+            gid = conn.execute("INSERT INTO people(name, hidden, faces, centroid) VALUES (?,?,?,?)",
+                               (row["name"], row["hidden"], len(face_ids), c.tobytes())).lastrowid
+            if str(pid) in hidden_refs:
+                conn.execute("INSERT OR IGNORE INTO hidden(kind, ref, reason) SELECT kind, ?, reason FROM hidden "
+                             "WHERE kind='person' AND ref=?", (str(gid), str(pid)))
+        for i in range(0, len(face_ids), 500):
+            chunk = face_ids[i:i + 500]
+            conn.execute(f"UPDATE faces SET person_id=? WHERE id IN ({','.join('?' * len(chunk))})", (gid, *chunk))
+        _resample(cfg, conn, gid)
+        ids.append(gid)
+    conn.commit()
+    return ids
+
+
+def _resample(cfg: Config, conn, pid: int) -> None:
+    """A fresh face picture for a group, from its clearest face on a frame that is still on disk."""
+    for f in conn.execute(
+            "SELECT f.x, f.y, f.w, f.h, fr.path FROM faces f JOIN frames fr ON fr.media_id=f.media_id "
+            "AND abs(fr.t - f.t) < 0.05 WHERE f.person_id=? ORDER BY coalesce(f.score,0) DESC LIMIT 5", (pid,)):
+        sample = _save_sample(cfg, cfg.library_dir / f["path"], (f["x"], f["y"], f["w"], f["h"]), pid)
+        if sample:
+            conn.execute("UPDATE people SET sample=? WHERE id=?", (sample, pid))
+            return
+
+
+def people_by_name(conn, min_faces: int = 3) -> dict:
+    """Named people (each with its face groups) and the groups still to name, for the dashboard."""
+    groups = list_people(conn, min_faces)
+    clips_by_name = {r["k"]: r["clips"] for r in conn.execute(
+        "SELECT lower(p.name) k, count(DISTINCT f.media_id) clips FROM faces f JOIN people p ON p.id=f.person_id "
+        "WHERE p.name IS NOT NULL GROUP BY lower(p.name)")}
+    persons: dict[str, dict] = {}
+    unnamed = []
+    for g in groups:
+        if not g["name"]:
+            unnamed.append(g)
+            continue
+        p = persons.setdefault(g["name"].lower(), {"name": g["name"], "groups": [], "faces": 0,
+                                                    "clips": clips_by_name.get(g["name"].lower(), 0)})
+        p["groups"].append(g)
+        p["faces"] += g["faces"] or 0
+    for p in persons.values():
+        p["hidden"] = all(g["hidden"] for g in p["groups"])
+        p["partly_hidden"] = any(g["hidden"] for g in p["groups"]) and not p["hidden"]
+        p["sample"] = next((g["sample"] for g in p["groups"] if g["sample"]), None)
+    return {"persons": sorted(persons.values(), key=lambda p: (not p["hidden"], -p["clips"])),
+            "unnamed": unnamed}
 
 
 def hide_people(cfg: Config, conn, ref: str, eng=None, log=print, dense: bool = True) -> dict:

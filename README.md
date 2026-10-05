@@ -191,7 +191,10 @@ crag search "sunset" --place Goa --exclude shaky --json
   the brain, exports or edits.
 - **People:** `crag faces` groups faces on your Mac; nothing is uploaded.
   - `crag people` lists the groups.
-  - `crag people name 7 Riya` names a group; giving two groups the same name merges them.
+  - `crag people name 7 Riya` names a group. Groups with the same name are one person, but each
+    group stays separate, so a wrongly named one can be renamed later (dashboard → People → open
+    the person). `crag people split 7` separates a group that holds several people (e.g. one merged
+    by an older version) back into face groups; they keep the name until you rename them.
   - `crag people hide Riya` hides that person everywhere.
   - Their clips are rechecked second by second, and only the parts where they appear are
     removed. The rest of those clips stays usable.

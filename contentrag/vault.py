@@ -483,23 +483,30 @@ def _write_videos(conn, gen: Path) -> None:
 
 
 def _write_people(cfg: Config, conn, vault: Path, gen: Path) -> None:
-    rows = conn.execute(
-        "SELECT p.*, (SELECT count(DISTINCT media_id) FROM faces f WHERE f.person_id=p.id) AS clips "
-        "FROM people p WHERE p.faces >= 3 ORDER BY (p.name IS NULL), p.faces DESC LIMIT 200").fetchall()
+    from .faces import people_by_name
+
+    data = people_by_name(conn, 3)
+
+    def img(sample, key):
+        if not sample or not (cfg.library_dir / sample).exists():
+            return ""
+        dst = vault / "_assets" / "people" / f"{key}.jpg"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(cfg.library_dir / sample, dst)
+        return f" ![[_assets/people/{key}.jpg|60]]"
+
     lines = ["# People", "",
-             "*Face groups found on this Mac. Name one with `crag people name <id> <name>` (same name = same "
-             "person), hide someone everywhere with `crag people hide <name>`.*", ""]
-    for p in rows:
-        img = ""
-        if p["sample"]:
-            src = cfg.library_dir / p["sample"]
-            dst = vault / "_assets" / "people" / f"{p['id']}.jpg"
-            if src.exists():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
-                img = f" ![[_assets/people/{p['id']}.jpg|60]]"
-        lines.append(f"- **#{p['id']} {p['name'] or '(unnamed)'}**{' · HIDDEN' if p['hidden'] else ''} · "
-                     f"{p['faces']} faces in {p['clips']} clips{img}")
+             "*Faces found on this Mac. Named in the dashboard (People) or with `crag people name <group> <name>`; "
+             "groups with the same name are one person. Hidden people must never be suggested or re-added.*", ""]
+    for p in data["persons"]:
+        ids = ", ".join(f"#{g['id']}" for g in p["groups"])
+        lines.append(f"- **{p['name']}**{' · HIDDEN' if p['hidden'] else ' · partly hidden' if p['partly_hidden'] else ''}"
+                     f" · {p['clips']} clips · face groups {ids}"
+                     + ("" if p["hidden"] else img(p["sample"], p["groups"][0]["id"])))
+    if data["unnamed"]:
+        lines += ["", "## Not named yet"]
+        for g in data["unnamed"][:100]:
+            lines.append(f"- #{g['id']} · {g['faces']} faces in {g['clips']} clips{img(g['sample'], g['id'])}")
     (gen / "People.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

@@ -160,13 +160,16 @@ def cmd_faces(args):
 
 
 def cmd_people(args):
-    from .faces import hide_people, list_people, name_person, resolve_people
+    from .faces import hide_people, list_people, name_person, resolve_people, split_person
     from .usage import unhide
 
     cfg, conn = _open(args)
     if args.action == "name":
-        kept = name_person(conn, int(args.ref.lstrip("#")), args.name)
-        print(f"group {args.ref} is now '{args.name}' (id {kept})")
+        name_person(conn, int(args.ref.lstrip("#")), args.name or "")
+        print(f"group {args.ref} is now '{args.name or '(unnamed)'}'")
+    elif args.action == "split":
+        ids = split_person(cfg, conn, int(args.ref.lstrip("#")))
+        print(f"group {args.ref} -> {len(ids)} groups: {', '.join('#' + str(i) for i in ids)} (same name for now)")
     elif args.action == "hide":
         print(json.dumps(hide_people(cfg, conn, args.ref), indent=2))
     elif args.action == "unhide":
@@ -469,9 +472,10 @@ def main(argv=None):
     sp.set_defaults(fn=cmd_faces)
 
     sp = sub.add_parser("people", help="list face groups, name them, hide someone everywhere")
-    sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "hide", "unhide"])
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "split", "hide", "unhide"])
     sp.add_argument("ref", nargs="?", help="group id (#7) or name")
-    sp.add_argument("name", nargs="?", help="for 'name': the person's name (same name = same person)")
+    sp.add_argument("name", nargs="?", help="for 'name': the person's name (groups with the same name = one person; "
+                                                "empty = unnamed). 'split <id>' separates a group's faces again")
     sp.add_argument("--min-faces", type=int, default=3)
     sp.set_defaults(fn=cmd_people)
 

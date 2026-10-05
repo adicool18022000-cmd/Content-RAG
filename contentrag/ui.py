@@ -302,16 +302,19 @@ def make_handler(cfg: Config, job: Job):
                 if url.path == "/api/search":
                     return self._search(qs)
                 if url.path == "/api/people":
-                    from .faces import list_people
+                    from .faces import people_by_name
 
                     conn = connect(cfg.db_path)
                     try:
-                        people = list_people(conn, int(qs.get("min", 3)))[:int(qs.get("limit", 60))]
+                        data = people_by_name(conn, int(qs.get("min", 3)))
                     finally:
                         conn.close()
-                    for p in people:
-                        p["sample_url"] = f"/api/thumb?p={p['sample']}" if p["sample"] else None
-                    return self._json({"people": people})
+                    thumb = lambda x: f"/api/thumb?p={x}" if x else None  # noqa: E731
+                    for g in data["unnamed"] + [g for p in data["persons"] for g in p["groups"]]:
+                        g["sample_url"] = thumb(g["sample"])
+                    for p in data["persons"]:
+                        p["sample_url"] = thumb(p["sample"])
+                    return self._json(data)
                 if url.path == "/api/thumb":
                     p = (library / qs.get("p", "")).resolve()
                     if library not in p.parents or not p.is_file():
@@ -374,29 +377,43 @@ def make_handler(cfg: Config, job: Job):
             if url.path == "/api/people":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
-                pid = int(body.get("id", 0))
-                if body.get("name"):
-                    from .faces import name_person
+                from .faces import name_person, resolve_people, split_person
+                from .usage import unhide
 
-                    conn = connect(cfg.db_path)
-                    try:
-                        kept = name_person(conn, pid, str(body["name"])[:60])
-                    finally:
-                        conn.close()
-                    return self._json({"ok": True, "id": kept})
-                if "hide" in body:
-                    if body["hide"]:
-                        job.params = {"person": str(pid)}
-                        ok, msg = job.start("hide_person")
-                        return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
-                    from .usage import unhide
+                conn = connect(cfg.db_path)
+                try:
+                    if "split" in body:  # separate the faces of one group into groups again
+                        ids = split_person(cfg, conn, int(body["split"]))
+                        return self._json({"ok": True, "groups": ids})
+                    if "rename" in body:  # rename a whole person (every group with that name)
+                        new = str(body.get("name") or "").strip()[:60]
+                        ids = [r["id"] for r in conn.execute("SELECT id FROM people WHERE lower(name)=lower(?)",
+                                                             (str(body["rename"]),))]
+                        for gid in ids:
+                            name_person(conn, gid, new)
+                        return self._json({"ok": True, "groups": ids})
+                    if "name" in body and "id" in body:  # name / rename / un-name one group
+                        return self._json({"ok": True, "id": name_person(conn, int(body["id"]),
+                                                                         str(body["name"] or "")[:60])})
+                    if "hide" in body:
+                        ref = str(body["person"]) if body.get("person") else str(int(body.get("id", 0)))
+                        if body["hide"]:
+                            from .faces import hide_people
 
-                    conn = connect(cfg.db_path)
-                    try:
-                        unhide(conn, "person", str(pid))
-                    finally:
-                        conn.close()
-                    return self._json({"ok": True})
+                            hide_people(cfg, conn, ref, dense=False)  # out of search/edits right away
+                            job.params = {"person": ref}  # then the exact on-screen seconds, if free now
+                            ok, _ = job.start("hide_person")
+                            return self._json({"ok": True, "message": "Hidden." + (
+                                "" if ok else " The exact on-screen seconds are refined on the next "
+                                              "Autopilot run (another job is running now).")})
+                        ids = resolve_people(conn, ref) if not ref.isdigit() else [int(ref)]
+                        for gid in ids:
+                            unhide(conn, "person", str(gid))
+                        return self._json({"ok": True})
+                except SystemExit as e:
+                    return self._json({"error": str(e)}, 400)
+                finally:
+                    conn.close()
                 return self._json({"error": "nothing to do"}, 400)
             if url.path == "/api/stop":
                 from .autopilot import read_state, stop_file

@@ -641,14 +641,23 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
     people = {p["id"]: p for p in list_people(conn, min_faces=1)}
     pa = next(pid for pid, p in people.items()
               if conn.execute("SELECT 1 FROM faces WHERE person_id=? AND media_id=?", (pid, goa)).fetchone())
-    # an extra group for the same person (other angle) gets merged by giving it the same name
+    # an extra group for the same person (other angle): same name = same person, groups stay separate
     extra = conn.execute("INSERT INTO people(faces, centroid) VALUES (1, ?)", (a2.tobytes(),)).lastrowid
     name_person(conn, pa, "Ex")
-    kept = name_person(conn, extra, "Ex")
-    assert kept == pa and not conn.execute("SELECT 1 FROM people WHERE id=?", (extra,)).fetchone()
+    name_person(conn, extra, "Ex")
+    from contentrag.faces import people_by_name, resolve_people
+
+    assert sorted(resolve_people(conn, "Ex")) == sorted([pa, extra])
+    ex = next(p for p in people_by_name(conn, 1)["persons"] if p["name"] == "Ex")
+    assert len(ex["groups"]) == 2
 
     out = hide_people(cfg, conn, "Ex", eng=Fake(), log=lambda *_: None)
     assert out["rescanned"] == 1 and out["matches"] >= 4  # dense pass found her at 1 fps
+    assert all(r["hidden"] for r in conn.execute("SELECT hidden FROM people WHERE id IN (?,?)", (pa, extra)))
+    # a group given a hidden person's name later is hidden straight away
+    late = conn.execute("INSERT INTO people(faces, centroid) VALUES (1, ?)", (a2.tobytes(),)).lastrowid
+    name_person(conn, late, "ex")
+    assert conn.execute("SELECT hidden FROM people WHERE id=?", (late,)).fetchone()[0] == 1
     ranges = hidden_ranges(conn, goa)
     assert ranges and ranges[0][0] <= 4.0 and ranges[-1][1] >= 8.0
     for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50):
@@ -1163,3 +1172,28 @@ def test_iphone_spatial_audio_track_is_skipped(tmp_path, monkeypatch):
     assert ok, err
     info = probe.ffprobe(tmp_path / "blur.mp4")["streams"]
     assert any(s["codec_type"] == "video" and s["width"] == 360 for s in info)
+
+
+def test_split_merged_group(env):
+    import numpy as np
+
+    from contentrag.faces import people_by_name, split_person
+
+    cfg, conn = env
+    rng = np.random.default_rng(0)
+    centres = [np.eye(128, dtype=np.float32)[i] for i in range(3)]  # three different people...
+    pid = conn.execute("INSERT INTO people(name, faces, centroid) VALUES ('Not important', 30, ?)",
+                       (centres[0].tobytes(),)).lastrowid
+    for k, c in enumerate(centres):  # ...merged into one named group by an older version
+        for i in range(10):
+            e = c + rng.normal(0, 0.05, 128).astype(np.float32)
+            e /= np.linalg.norm(e)
+            conn.execute("INSERT INTO faces(media_id, t, x, y, w, h, score, emb, person_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                         (f"m{k}", float(i), 0, 0, 10, 10, 0.9, e.astype(np.float32).tobytes(), pid))
+    conn.commit()
+    ids = split_person(cfg, conn, pid)
+    assert len(ids) == 3 and ids[0] == pid
+    sizes = sorted(conn.execute("SELECT count(*) FROM faces WHERE person_id=?", (g,)).fetchone()[0] for g in ids)
+    assert sizes == [10, 10, 10]
+    p = next(p for p in people_by_name(conn, 1)["persons"] if p["name"] == "Not important")
+    assert len(p["groups"]) == 3  # same name until renamed

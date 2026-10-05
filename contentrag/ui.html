@@ -2,407 +2,694 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Content-RAG</title>
 <style>
 :root {
-  --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e3e0;
-  --accent: #2f6fed; --ok: #1f9d55; --warn: #c27c0e; --bad: #d64545; --chip: #efefec;
+  --bg: #f5f5f7; --surface: #ffffff; --surface-2: #fbfbfd; --label: #1d1d1f; --secondary: #6e6e73;
+  --tertiary: #86868b; --separator: rgba(0, 0, 0, .08); --fill: #e8e8ed; --fill-hover: #dcdce1;
+  --accent: #0071e3; --accent-hover: #0077ed; --accent-soft: rgba(0, 113, 227, .1);
+  --green: #248a3d; --green-dot: #34c759; --orange: #c93400; --orange-dot: #ff9f0a; --red: #d70015; --red-dot: #ff3b30;
+  --nav: rgba(245, 245, 247, .78); --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 6px 20px rgba(0, 0, 0, .05);
+  --radius: 18px; --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Inter, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111113; --panel: #1b1b1e; --ink: #ececef; --muted: #9a9aa2; --line: #2c2c31;
-          --accent: #6b9bff; --ok: #3ccf7f; --warn: #f0b04a; --bad: #ff7272; --chip: #26262b; }
+  :root {
+    --bg: #000000; --surface: #1c1c1e; --surface-2: #232325; --label: #f5f5f7; --secondary: #a1a1a6; --tertiary: #8e8e93;
+    --separator: rgba(255, 255, 255, .12); --fill: #2c2c2e; --fill-hover: #3a3a3c;
+    --accent: #0a84ff; --accent-hover: #409cff; --accent-soft: rgba(10, 132, 255, .18);
+    --green: #30d158; --green-dot: #30d158; --orange: #ff9f0a; --orange-dot: #ff9f0a; --red: #ff453a; --red-dot: #ff453a;
+    --nav: rgba(22, 22, 23, .78); --shadow: 0 0 0 1px rgba(255, 255, 255, .06);
+  }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
-header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-header h1 { font-size: 17px; margin: 0; }
-header .sub { color: var(--muted); font-size: 12px; }
-main { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 380px 1fr; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
-.row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
-.row b { font-variant-numeric: tabular-nums; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-.ok { background: var(--ok); } .bad { background: var(--bad); } .warn { background: var(--warn); }
-button { font: inherit; border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 7px; padding: 6px 10px; cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-button:disabled { opacity: .45; cursor: default; }
-.steps { display: grid; gap: 6px; }
-.step { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
-.step:first-child { border-top: 0; }
-.step small { display: block; color: var(--muted); }
-#log { font: 12px/1.5 ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; height: 260px; overflow: auto; white-space: pre-wrap; }
-.searchbar { display: flex; gap: 8px; flex-wrap: wrap; }
-.searchbar input[type=text] { flex: 1 1 260px; }
-input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
-.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--muted); font-size: 12px; align-items: center; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-top: 12px; }
-.card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; background: var(--bg); }
-.card img { width: 100%; height: 150px; object-fit: contain; background: #000; display: block; }
-.card .b { padding: 7px 8px; font-size: 12px; }
-.card .t { color: var(--muted); }
-.chip { display: inline-block; background: var(--chip); border-radius: 5px; padding: 0 5px; margin-right: 3px; font-size: 11px; }
-.empty { color: var(--muted); padding: 20px 0; text-align: center; }
-dialog { border: 0; border-radius: 12px; padding: 0; max-width: min(900px, 95vw); background: var(--panel); color: var(--ink); }
-dialog::backdrop { background: rgba(0,0,0,.6); }
-dialog video { width: 100%; max-height: 70vh; background: #000; display: block; }
-dialog .b { padding: 12px 14px; }
-code { font-size: 11px; word-break: break-all; color: var(--muted); }
-.note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--label); font: 15px/1.47 var(--font); letter-spacing: -.01em;
+       -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; letter-spacing: inherit; color: inherit; }
+a { color: var(--accent); text-decoration: none; }
+[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- navigation */
+.nav { position: sticky; top: 0; z-index: 20; background: var(--nav); border-bottom: 1px solid var(--separator);
+       backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); }
+.nav-inner { max-width: 1120px; margin: 0 auto; padding: 10px 24px; display: grid; gap: 10px;
+             grid-template-columns: 1fr auto 1fr; align-items: center; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-mark { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center;
+              background: linear-gradient(135deg, #5e5ce6, #0a84ff); color: #fff; font-weight: 700; font-size: 14px; }
+.brand-name { font-weight: 600; font-size: 15px; white-space: nowrap; }
+.brand-sub { color: var(--tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.segmented { display: inline-flex; background: var(--fill); border-radius: 9px; padding: 2px; gap: 2px; }
+.segmented button { border: 0; background: transparent; padding: 5px 16px; border-radius: 7px; font-size: 13px;
+                    font-weight: 500; cursor: pointer; color: var(--label); white-space: nowrap; }
+.segmented button[aria-selected="true"] { background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.status-pill { justify-self: end; display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px;
+               border-radius: 980px; background: var(--surface); box-shadow: var(--shadow); font-size: 13px;
+               font-weight: 500; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tertiary); flex: none; }
+.dot.green { background: var(--green-dot); } .dot.orange { background: var(--orange-dot); } .dot.red { background: var(--red-dot); }
+.dot.pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* ---------------------------------------------------------------- page */
+main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 96px; }
+.page-head { margin-bottom: 24px; }
+.page-head h1 { font-size: 34px; line-height: 1.12; font-weight: 700; letter-spacing: -.025em; margin: 0; }
+.page-head p { color: var(--secondary); margin: 6px 0 0; font-size: 17px; max-width: 640px; }
+.stack { display: grid; gap: 20px; }
+.card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; min-width: 0; }
+.card h2 { font-size: 21px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 4px; }
+.card .lede { color: var(--secondary); margin: 0 0 18px; font-size: 14px; }
+.section-title { font-size: 13px; font-weight: 600; color: var(--secondary); text-transform: uppercase;
+                 letter-spacing: .02em; margin: 28px 4px 10px; }
+.muted { color: var(--secondary); } .small { font-size: 13px; } .tiny { font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- controls */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 18px;
+       border-radius: 980px; border: 0; cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap;
+       background: var(--fill); color: var(--label); transition: background .15s, opacity .15s; }
+.btn:hover { background: var(--fill-hover); }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.plain { background: transparent; color: var(--accent); padding: 0 10px; }
+.btn.plain:hover { background: var(--accent-soft); }
+.btn.danger { color: var(--red); }
+.btn.small { height: 30px; padding: 0 14px; font-size: 13px; }
+.btn.large { height: 44px; padding: 0 24px; font-size: 16px; }
+.btn:disabled { opacity: .4; cursor: default; }
+:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--accent-soft), 0 0 0 1px var(--accent); }
+.field { height: 36px; border-radius: 10px; border: 1px solid transparent; background: var(--fill); padding: 0 12px;
+         width: 100%; min-width: 0; transition: background .15s, border-color .15s; }
+.field:hover { background: var(--fill-hover); }
+.field:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); outline: none; }
+select.field { appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2386868b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; white-space: nowrap; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.row-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ---------------------------------------------------------------- home */
+.hero { display: grid; gap: 18px; }
+.hero-top { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.hero h2 { font-size: 24px; }
+.progress { height: 6px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
+.progress-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--secondary); flex-wrap: wrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 16px 18px; min-width: 0; }
+.tile .v { font-size: 28px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; }
+.tile .k { color: var(--secondary); font-size: 13px; margin-top: 2px; }
+.notice { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px;
+          background: var(--accent-soft); font-size: 14px; }
+.notice.warn { background: rgba(255, 159, 10, .14); }
+.log { font: 12px/1.6 var(--mono); background: var(--surface-2); border-radius: 12px; padding: 12px 14px; height: 300px;
+       overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--secondary); border: 1px solid var(--separator); }
+
+/* ---------------------------------------------------------------- lists (iOS inset grouped) */
+.list { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 14px; padding: 12px 18px; min-height: 52px; position: relative; }
+.item + .item::before, .item + details::before, details + .item::before, details + details::before {
+  content: ""; position: absolute; top: 0; left: 18px; right: 0; border-top: 1px solid var(--separator); }
+.list > details { position: relative; }
+.list > div:not(.item) > .item::before { content: ""; position: absolute; top: 0; left: 18px; right: 0;
+  border-top: 1px solid var(--separator); }
+.item .grow { flex: 1; min-width: 0; }
+.item.wrap { flex-wrap: wrap; }
+.item .sub code { font: 12px var(--mono); }
+.item .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .sub { color: var(--secondary); font-size: 13px; }
+.item .value { color: var(--secondary); font-size: 14px; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 980px; font-size: 12px;
+         font-weight: 500; background: var(--fill); color: var(--secondary); white-space: nowrap; }
+.badge.red { background: rgba(255, 59, 48, .12); color: var(--red); }
+.badge.blue { background: var(--accent-soft); color: var(--accent); }
+.badge.green { background: rgba(52, 199, 89, .14); color: var(--green); }
+.chev { width: 8px; height: 8px; border-right: 2px solid var(--tertiary); border-bottom: 2px solid var(--tertiary);
+        transform: rotate(-45deg); transition: transform .2s; flex: none; margin: 0 4px 0 2px; }
+details[open] > summary .chev { transform: rotate(45deg); }
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+.sublist { background: var(--surface-2); border-top: 1px solid var(--separator); }
+.sublist .item { padding-left: 34px; }
+.sublist .item + .item::before { left: 34px; }
+
+/* ---------------------------------------------------------------- people */
+.avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--fill); flex: none; }
+.avatar.lg { width: 56px; height: 56px; }
+.face-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.face { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 18px 14px 14px;
+        display: grid; justify-items: center; gap: 10px; text-align: center; min-width: 0; }
+.face .avatar { width: 84px; height: 84px; }
+.face .field { text-align: center; }
+.face .meta { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.name-input { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; margin-left: -8px;
+              font-weight: 600; font-size: 16px; width: 100%; min-width: 0; height: 32px; }
+.name-input:hover { background: var(--fill); }
+.name-input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); outline: none; }
+.sublist .name-input { font-weight: 500; font-size: 15px; }
+.sublist .item .sub + .name-input { margin-top: 2px; }
+.toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar .field { max-width: 320px; }
+
+/* ---------------------------------------------------------------- search */
+.search-box { position: relative; flex: 1 1 320px; }
+.search-box svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--tertiary); }
+.search-box .field { height: 44px; padding-left: 40px; font-size: 16px; border-radius: 12px; }
+.filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 14px; align-items: center; }
+.filters .wide { grid-column: span 2; }
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-top: 20px; }
+.result { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; cursor: pointer;
+          display: flex; flex-direction: column; min-width: 0; transition: transform .2s ease, box-shadow .2s ease; }
+.result:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(0, 0, 0, .06), 0 12px 28px rgba(0, 0, 0, .1); }
+.thumb { position: relative; aspect-ratio: 16 / 10; background: #111; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pick { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 50%;
+        border: 2px solid #fff; background: rgba(0, 0, 0, .25); display: grid; place-items: center; cursor: pointer; }
+.pick.on { background: var(--accent); border-color: var(--accent); }
+.pick.on::after { content: ""; width: 6px; height: 11px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }
+.thumb .time { position: absolute; left: 10px; bottom: 10px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 12px;
+               padding: 2px 8px; border-radius: 980px; backdrop-filter: blur(6px); }
+.result .body { padding: 12px 14px 14px; display: grid; gap: 6px; }
+.result .desc { font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.result .where { font-size: 12px; color: var(--tertiary); }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.selbar { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; display: flex; gap: 10px;
+          align-items: center; padding: 8px 8px 8px 18px; border-radius: 980px; background: var(--nav);
+          backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+          box-shadow: 0 8px 30px rgba(0, 0, 0, .18); border: 1px solid var(--separator); max-width: calc(100vw - 32px); }
+.empty { text-align: center; color: var(--secondary); padding: 48px 16px; grid-column: 1 / -1; }
+
+/* ---------------------------------------------------------------- dialog, toast */
+dialog { border: 0; padding: 0; border-radius: 20px; width: min(920px, calc(100vw - 32px)); background: var(--surface);
+         color: var(--label); box-shadow: 0 24px 80px rgba(0, 0, 0, .35); }
+dialog::backdrop { background: rgba(0, 0, 0, .45); backdrop-filter: blur(4px); }
+dialog video, dialog .photo { width: 100%; max-height: 66vh; background: #000; display: block; object-fit: contain; }
+dialog .body { padding: 18px 22px 22px; display: grid; gap: 10px; }
+dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-all; }
+.toast { position: fixed; left: 50%; top: 72px; transform: translate(-50%, -12px); opacity: 0; z-index: 40; pointer-events: none;
+         background: var(--label); color: var(--bg); padding: 10px 18px; border-radius: 980px; font-size: 14px; font-weight: 500;
+         box-shadow: 0 8px 30px rgba(0, 0, 0, .2); transition: opacity .2s, transform .2s; max-width: calc(100vw - 32px); text-align: center; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------------------------------------------------------------- responsive */
+@media (max-width: 860px) {
+  .nav-inner { grid-template-columns: 1fr auto; padding: 10px 16px; }
+  .segmented { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; display: flex; overflow-x: auto; }
+  .segmented button { flex: 1; padding: 6px 10px; }
+  main { padding: 24px 16px 96px; }
+  .page-head h1 { font-size: 28px; }
+  .card { padding: 20px; }
+  .filters .wide { grid-column: auto; }
+}
+@media (max-width: 520px) {
+  .brand-sub { display: none; }
+  .status-pill { font-size: 12px; padding: 4px 10px; }
+  .item { padding: 12px 14px; gap: 12px; }
+  .results { grid-template-columns: 1fr; }
+  .hero .row-actions { width: 100%; }
+  .hero .row-actions > * { flex: 1 1 auto; }
+  .item .sub { word-break: break-word; }
+  #backend { max-width: none !important; }
+  .face-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .face { padding: 14px 10px 10px; }
+  .face .avatar { width: 64px; height: 64px; }
+  .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #sf { flex-wrap: wrap !important; }
+  #sf .btn { width: 100%; }
+  .tile .v { font-size: 24px; }
+}
 </style>
 </head>
 <body>
-<header>
-  <div>
-    <h1>Content-RAG</h1>
-    <div class="sub" id="lib">loading…</div>
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">C</div>
+      <div style="min-width:0"><div class="brand-name">Content Library</div><div class="brand-sub" id="lib">Loading…</div></div>
+    </div>
+    <div class="segmented" role="tablist">
+      <button role="tab" data-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-tab="search">Search</button>
+      <button role="tab" data-tab="people">People</button>
+      <button role="tab" data-tab="settings">Settings</button>
+    </div>
+    <div class="status-pill" id="pill"><span class="dot"></span><span>Connecting…</span></div>
   </div>
-</header>
+</nav>
+
 <main>
-  <div style="display:grid;gap:16px;align-content:start">
-    <section>
-      <h2>Autopilot</h2>
-      <div id="ap" class="note" style="margin-top:0">Runs everything by itself: finds files, prepares them, analyses with AI,
-        waits out quota limits, retries failures, builds search and the Obsidian vault. Keep the Mac plugged in, lid open.</div>
-      <div id="apstate" style="margin:8px 0"></div>
-      <div id="apbar" style="display:none;height:8px;background:var(--chip);border-radius:4px;overflow:hidden;margin-bottom:6px">
-        <div id="apfill" style="height:100%;width:0;background:var(--accent)"></div></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="primary" id="apstart">Start Autopilot</button>
-        <select id="aphours" title="Give up waiting after"><option value="12">up to 12 h</option><option value="24" selected>up to 24 h</option><option value="48">up to 48 h</option></select>
-        <button id="apstop">Stop</button>
+  <!-- ======================================================== HOME -->
+  <section data-page="home">
+    <div class="page-head"><h1>Your footage</h1>
+      <p>Everything you've filmed, organised and described so you can find any moment in seconds.</p></div>
+    <div class="stack">
+      <div class="card hero">
+        <div class="hero-top">
+          <div style="min-width:0">
+            <h2 id="apTitle">Ready</h2>
+            <div class="muted small" id="apSub">Autopilot finds new files, prepares them, analyses them with AI and builds your search and Life Vault — all by itself.</div>
+          </div>
+          <div class="row-actions">
+            <select class="field" id="aphours" style="width:auto" aria-label="Keep trying for">
+              <option value="12">Up to 12 hours</option><option value="24" selected>Up to 24 hours</option><option value="48">Up to 48 hours</option></select>
+            <button class="btn" id="apstop" type="button">Stop</button>
+            <button class="btn primary" id="apstart" type="button">Start Autopilot</button>
+          </div>
+        </div>
+        <div id="apProgress" hidden>
+          <div class="progress"><div id="apfill"></div></div>
+          <div class="progress-meta"><span id="apCount"></span><span id="apEta"></span></div>
+        </div>
+        <div class="notice warn" id="apNotice" hidden></div>
+        <div class="tiny muted">Keep the Mac plugged in with the lid open and the drive connected. If anything stops it, press Start again — nothing is done twice.</div>
       </div>
-    </section>
 
-    <section>
-      <h2>Setup</h2>
-      <div class="row"><span>AI for analysis</span>
-        <select id="backend" title="Which AI looks at your footage"></select></div>
-      <div class="note" id="backendnote"></div>
-      <div id="setup"></div>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <button id="checkKey">Check key / login &amp; models</button>
+      <div class="tiles" id="tiles"></div>
+
+      <div id="problems" hidden>
+        <div class="section-title">Needs attention</div>
+        <div class="list" id="fails"></div>
       </div>
-      <div class="note" id="models"></div>
-    </section>
 
-    <section>
-      <h2>People</h2>
-      <div class="note" style="margin-top:0">Faces found on this Mac. Name a group (same name = same person). "Hide" keeps
-        that person out of every search, export and edit; the rest of those clips stays usable.</div>
-      <div id="people" style="display:grid;gap:6px;margin-top:8px;max-height:560px;overflow-y:auto;padding-right:4px"></div>
-    </section>
+      <details class="card" id="activity">
+        <summary style="display:flex;align-items:center;gap:8px"><span class="chev"></span><h2 style="margin:0">Activity</h2>
+          <span class="muted small" style="margin-left:auto" id="lastLine"></span></summary>
+        <div class="log" id="log" style="margin-top:16px"></div>
+      </details>
+    </div>
+  </section>
 
-    <section>
-      <h2>Library</h2>
-      <div id="counts"></div>
-    </section>
-
-    <section id="failbox" style="display:none">
-      <h2>Problems</h2>
-      <div id="fails"></div>
-      <div class="note">Fix the cause, then click "Retry failed".</div>
-    </section>
-
-    <section>
-      <h2>Pipeline</h2>
-      <div class="steps" id="steps"></div>
-      <div style="margin-top:10px;display:flex;gap:8px">
-        <button class="primary" data-step="all">Run everything</button>
-        <button id="stop">Stop</button>
-      </div>
-      <div class="note">Every step can be re-run: it only processes new or unfinished files.</div>
-    </section>
-
-    <section>
-      <h2>Cost</h2>
-      <div id="cost"><div class="row"><span>Spent so far</span><b>–</b></div></div>
-      <button id="estimate" style="margin-top:6px">Estimate remaining</button>
-      <div id="est" class="note"></div>
-    </section>
-  </div>
-
-  <div style="display:grid;gap:16px;align-content:start">
-    <section>
-      <h2>Search your footage</h2>
-      <form class="searchbar" id="sf">
-        <input type="text" id="q" placeholder="e.g. riding the bike at night, typing on laptop, college friends">
-        <button class="primary">Search</button>
+  <!-- ======================================================== SEARCH -->
+  <section data-page="search" hidden>
+    <div class="page-head"><h1>Search</h1><p>Describe what you're looking for, in your own words.</p></div>
+    <div class="card">
+      <form id="sf" class="row-actions" style="flex-wrap:nowrap">
+        <label class="search-box">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input class="field" id="q" type="search" placeholder="Riding the bike at night, college friends laughing…" autocomplete="off">
+        </label>
+        <button class="btn primary large" type="submit">Search</button>
       </form>
       <div class="filters">
-        <select id="orientation"><option value="">any orientation</option><option>vertical</option><option>horizontal</option></select>
-        <select id="min_broll"><option value="">any quality</option><option value="3">B-roll ≥ 3</option><option value="4">B-roll ≥ 4</option><option value="5">B-roll 5</option></select>
-        <select id="root"><option value="">all folders</option><option value="archive">life archive</option><option value="brand">brand B-roll</option></select>
-        <select id="kind"><option value="">videos + photos</option><option value="video">videos</option><option value="photo">photos</option></select>
-        from <input id="from" placeholder="2021" size="7"> to <input id="to" placeholder="2023-06" size="7">
-        <label><input type="checkbox" id="noshaky"> no shaky/blurry</label>
-        <input id="collection" placeholder="collection (e.g. thailand)" size="18">
-        <select id="role"><option value="">any role</option><option>hook</option><option>cinematic</option>
-          <option>spectacle</option><option value="story_to_camera">told to camera</option><option>funny</option>
-          <option>emotional</option><option>friends</option><option>establishing</option><option>transition</option>
-          <option>action</option><option>food</option><option>calm</option><option>work</option></select>
-        <label><input type="checkbox" id="fresh"> unused only</label>
+        <select class="field" id="kind"><option value="">All media</option><option value="video">Videos only</option><option value="photo">Photos only</option></select>
+        <select class="field" id="orientation"><option value="">Any orientation</option><option value="vertical">Vertical</option><option value="horizontal">Horizontal</option></select>
+        <select class="field" id="role"><option value="">Any moment</option><option value="hook">Hook</option><option value="cinematic">Cinematic</option>
+          <option value="spectacle">Spectacle</option><option value="story_to_camera">Told to camera</option><option value="funny">Funny</option>
+          <option value="emotional">Emotional</option><option value="friends">Friends</option><option value="establishing">Establishing shot</option>
+          <option value="transition">Transition</option><option value="action">Action</option><option value="food">Food</option><option value="calm">Calm</option><option value="work">Work</option></select>
+        <select class="field" id="min_broll"><option value="">Any quality</option><option value="3">Good (3+)</option><option value="4">Great (4+)</option><option value="5">Best (5)</option></select>
+        <input class="field" id="collection" placeholder="Folder or trip, e.g. Goa">
+        <input class="field" id="from" placeholder="From, e.g. 2021">
+        <input class="field" id="to" placeholder="To, e.g. 2023-06">
+        <select class="field" id="root"><option value="">All drives</option><option value="archive">Life archive</option><option value="brand">Brand B-roll</option></select>
+        <label class="check"><input type="checkbox" id="noshaky"> Skip shaky or blurry</label>
+        <label class="check"><input type="checkbox" id="fresh"> Not used yet</label>
       </div>
-      <div id="selbar" style="display:none;margin-top:10px;gap:8px;align-items:center">
-        <b id="selcount"></b> <button class="primary" id="export">Export selected clips</button>
-        <button id="clearsel">Clear</button>
-        <span class="note">Cuts them from the originals + a Premiere timeline, into library/exports/</span>
-      </div>
-      <div id="results" class="grid"></div>
-    </section>
+    </div>
+    <div class="results" id="results"><div class="empty">Your results will appear here.</div></div>
+    <div class="selbar" id="selbar" hidden>
+      <b id="selcount" class="num" style="white-space:nowrap"></b>
+      <button class="btn plain small" id="clearsel" type="button">Clear</button>
+      <button class="btn primary small" id="export" type="button">Export clips</button>
+    </div>
+  </section>
 
-    <section>
-      <h2>Activity</h2>
-      <div id="log"></div>
-    </section>
-  </div>
+  <!-- ======================================================== PEOPLE -->
+  <section data-page="people" hidden>
+    <div class="page-head"><h1>People</h1>
+      <p>Faces found in your footage, privately on this Mac. Give them names, and hide anyone who should never appear in your content.</p></div>
+    <div id="peopleBody" class="stack"><div class="empty">Loading…</div></div>
+  </section>
+
+  <!-- ======================================================== SETTINGS -->
+  <section data-page="settings" hidden>
+    <div class="page-head"><h1>Settings</h1><p>How your footage is analysed, and what it costs.</p></div>
+
+    <div class="section-title">AI analysis</div>
+    <div class="list">
+      <div class="item wrap"><div class="grow" style="flex-basis:220px"><div class="title">AI that watches your footage</div>
+        <div class="sub" id="backendnote">Already analysed footage is kept when you switch.</div></div>
+        <select class="field" id="backend" style="flex:1 1 260px;max-width:360px" aria-label="AI for analysis"></select></div>
+      <div id="setup"></div>
+      <div class="item"><div class="grow"><div class="title">Check connection</div><div class="sub" id="models">Confirms the key or login works and the model is available.</div></div>
+        <button class="btn small" id="checkKey" type="button">Check</button></div>
+    </div>
+
+    <div class="section-title">Cost</div>
+    <div class="list">
+      <div class="item"><div class="grow"><div class="title">Spent so far</div><div class="sub" id="tokens">—</div></div><div class="value num" id="spent">—</div></div>
+      <div class="item"><div class="grow"><div class="title">Cost of what's left</div><div class="sub" id="est">A rough estimate before anything is sent.</div></div>
+        <button class="btn small" id="estimate" type="button">Estimate</button></div>
+    </div>
+
+    <div class="section-title">Individual steps</div>
+    <div class="list" id="steps"></div>
+    <div class="tiny muted" style="margin:10px 4px 0">Autopilot runs all of these for you. Each step only handles new or unfinished files, so running one again is always safe.</div>
+  </section>
 </main>
 
 <dialog id="player">
   <video id="video" controls playsinline></video>
-  <div class="b" id="pinfo"></div>
-  <div class="b" style="padding-top:0"><button onclick="document.getElementById('player').close()">Close</button></div>
+  <div class="body" id="pinfo"></div>
+  <div class="body" style="padding-top:0"><div class="row-actions" style="justify-content:flex-end">
+    <button class="btn" type="button" onclick="document.getElementById('player').close()">Done</button></div></div>
 </dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json", "X-Crag": "1"}, body: JSON.stringify(body || {})});
+const fmt = (n) => Number(n || 0).toLocaleString();
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3200);
+}
 
-const STEP_INFO = [
-  ["scan", "Scan drives", "Find files, remove duplicates, read date / GPS"],
-  ["prep", "Prepare", "Thumbnails and scene cuts (local, ffmpeg)"],
-  ["faces", "Group faces", "Find people in the footage (local, private)"],
-  ["transcribe", "Transcribe", "Whisper on your Mac (optional with Gemini)"],
-  ["describe", "Analyse with AI", "Gemini watches each clip and writes moments"],
-  ["retry", "Retry failed", "Send failed or blocked requests again"],
-  ["embed", "Search index", "Search by meaning (local)"],
-  ["vault", "Build vault", "Obsidian notes: timeline, events, B-roll"],
-];
-$("steps").innerHTML = STEP_INFO.map(([k, t, d]) =>
-  `<div class="step"><div><b>${t}</b><small>${d}</small></div><button data-step="${k}">Run</button></div>`).join("");
+/* ------------------------------------------------------------- tabs */
+function showTab(name) {
+  if (!document.querySelector(`[data-page="${name}"]`)) name = "home";
+  document.querySelectorAll("[data-page]").forEach(p => p.hidden = p.dataset.page !== name);
+  document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+  if (name === "people") loadPeople();
+  window.scrollTo({top: 0});
+}
+document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
+/* ------------------------------------------------------------- status */
+const PHASE = {scan: "Finding new files", prep: "Preparing thumbnails", faces: "Finding faces", transcribe: "Transcribing speech",
+  analyse: "Analysing with AI", retry: "Retrying files that failed", "search index": "Building search", vault: "Writing your Life Vault"};
+let running = false;
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); } catch { setPill("red", "Dashboard offline — run crag ui"); return; }
+  if (s.error) { setPill("red", s.error); return; }
+  running = s.job.running;
+  const aiName = {gemini: "Gemini", "claude-code": "Claude subscription", claude: "Claude API"}[s.backend] || s.backend;
+  $("lib").textContent = `${s.library} · ${aiName}`;
+
+  const ap = s.autopilot || {}, pr = ap.progress, active = ["running", "waiting"].includes(ap.status);
+  const pct = pr ? Math.round(100 * pr.done / Math.max(1, pr.total)) : null;
+  const title = {
+    running: PHASE[ap.phase] || "Working", waiting: "Paused for now", finished: "All done", stopped: "Stopped",
+    "needs attention": "Needs your attention", error: "Couldn't start", interrupted: "Interrupted"}[ap.status] || (running ? "Working" : "Ready");
+  $("apTitle").textContent = title;
+  $("apSub").textContent = ap.status === "waiting" && ap.waiting_until
+    ? `Continues at ${ap.waiting_until.slice(11, 16)} — ${ap.message || ""}`
+    : ap.status === "interrupted" ? "The last run was cut off. Press Resume — finished work is kept."
+    : ap.message || (active ? "Working through your footage. You can leave this running." :
+      "Autopilot finds new files, prepares them, analyses them with AI and builds your search and Life Vault — all by itself.");
+  $("apProgress").hidden = !pr;
+  if (pr) {
+    $("apfill").style.width = pct + "%";
+    $("apCount").textContent = `${fmt(pr.done)} of ${fmt(pr.total)} · ${pct}%`;
+    $("apEta").textContent = pr.eta ? `Done around ${pr.eta}` : "";
+  }
+  const bad = ["needs attention", "error"].includes(ap.status);
+  $("apNotice").hidden = !bad;
+  if (bad) $("apNotice").textContent = ap.message || "";
+  $("apstart").textContent = ap.status === "interrupted" ? "Resume" : "Start Autopilot";
+  $("apstart").disabled = running || active;
+  $("apstop").disabled = !(running || active);
+  setPill(ap.status === "running" || running ? "green pulse" : ap.status === "waiting" ? "orange" : bad ? "red" : "",
+          ap.status === "running" ? `${PHASE[ap.phase] || "Working"}${pct != null ? ` · ${pct}%` : ""}`
+          : ap.status === "waiting" ? `Paused until ${(ap.waiting_until || "").slice(11, 16)}`
+          : running ? `Running: ${s.job.name}` : bad ? "Needs attention" : ap.status === "finished" ? "Up to date" : "Idle");
+
+  const m = s.media, total = m.videos + m.photos, req = s.requests || {};
+  const tiles = [
+    [fmt(m.videos), `Videos · ${m.hours} h`], [fmt(m.photos), "Photos"],
+    [total ? Math.round(100 * m.described / total) + "%" : "–", `Analysed · ${fmt(m.described)} of ${fmt(total)}`],
+    [fmt(s.moments), "Moments you can search"], [fmt((req.pending || 0) + (req.submitted || 0)), "Waiting for AI"],
+    [s.spent ? "$" + s.spent.usd.toFixed(2) : "–", "Spent on AI"]];
+  $("tiles").innerHTML = tiles.map(([v, k]) => `<div class="tile"><div class="v num">${esc(v)}</div><div class="k">${esc(k)}</div></div>`).join("");
+
+  const fl = s.failures || [];
+  $("problems").hidden = !fl.length;
+  $("fails").innerHTML = fl.map(f => `<div class="item"><div class="grow">
+      <div class="title">${esc((f.file || f.request).split("/").pop())}</div>
+      <div class="sub">${esc(f.error)}</div><div class="tiny muted">${esc(f.file || "")}</div></div>
+      <span class="badge ${f.status === "gave up" ? "red" : ""}">${esc(f.status)}</span></div>`).join("");
+
+  // settings
+  const sel = $("backend");
+  if (document.activeElement !== sel) sel.innerHTML = Object.entries(s.backends || {}).map(([k, v]) =>
+    `<option value="${esc(k)}"${k === s.backend ? " selected" : ""}>${esc(v)}</option>`).join("");
+  sel.disabled = running || active;
+  const login = s.backend === "claude-code";
+  $("setup").innerHTML = `<div class="item"><span class="dot ${s.key_present ? "green" : "red"}"></span><div class="grow">
+      <div class="title">${login ? "Claude Code login" : esc(s.key_env)}</div>
+      <div class="sub">${s.key_present ? (login ? "Logged in" : "Key found") : login
+        ? "Not logged in — in Terminal run <code>claude</code>, then type <code>/login</code>"
+        : `Missing — in Terminal run <code>export ${esc(s.key_env)}=your-key</code>, then restart <code>crag ui</code>`}</div></div></div>` +
+    s.roots.map(r => `<div class="item"><span class="dot ${r.mounted ? "green" : "orange"}"></span><div class="grow">
+      <div class="title">${esc(r.name)}</div><div class="sub">${esc(r.path)}</div></div>
+      <span class="badge">${r.mounted ? "Connected" : "Not plugged in"}</span></div>`).join("");
+  if (s.spent) {
+    $("spent").textContent = "$" + s.spent.usd.toFixed(2);
+    $("tokens").textContent = `${(s.spent.input_tokens / 1e6).toFixed(1)}M tokens in · ${(s.spent.output_tokens / 1e6).toFixed(1)}M out`;
+  }
+  document.querySelectorAll("[data-step]").forEach(b => b.disabled = running || active);
+}
+function setPill(cls, text) { $("pill").innerHTML = `<span class="dot ${cls}"></span><span>${esc(text)}</span>`; }
+
+$("apstart").onclick = async () => {
+  const j = await (await post("/api/run", {step: "autopilot", hours: $("aphours").value})).json();
+  toast(j.ok ? "Autopilot started" : (j.message || j.error)); refresh();
+};
+$("apstop").onclick = async () => { await post("/api/stop"); toast("Stopping after the current file…"); refresh(); };
+
+/* ------------------------------------------------------------- activity */
+let logNext = 0;
+async function pollLog() {
+  try {
+    const j = await (await fetch(`/api/log?since=${logNext}`)).json();
+    if (j.lines.length) {
+      const el = $("log"), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+      el.textContent += j.lines.join("\n") + "\n";
+      if (atBottom) el.scrollTop = el.scrollHeight;
+      $("lastLine").textContent = j.lines[j.lines.length - 1].slice(0, 80);
+    }
+    logNext = j.next;
+    if (j.running !== running) refresh();
+  } catch {}
+}
+
+/* ------------------------------------------------------------- settings */
+const STEPS = [
+  ["scan", "Find files", "New files, duplicates, dates and places"], ["prep", "Prepare", "Thumbnails and scene cuts, on this Mac"],
+  ["faces", "Find faces", "Groups faces privately, on this Mac"], ["transcribe", "Transcribe", "Speech to text with Whisper (optional)"],
+  ["describe", "Analyse with AI", "Describes every moment"], ["retry", "Retry failed", "Sends failed files again"],
+  ["embed", "Build search", "Search by meaning"], ["vault", "Write Life Vault", "Your Obsidian notes"]];
+$("steps").innerHTML = STEPS.map(([k, t, d]) => `<div class="item"><div class="grow"><div class="title">${t}</div><div class="sub">${d}</div></div>
+  <button class="btn small" type="button" data-step="${k}">Run</button></div>`).join("");
 document.addEventListener("click", async (e) => {
   const step = e.target?.dataset?.step;
   if (!step) return;
-  const r = await post("/api/run", {step});
-  const j = await r.json();
-  if (!j.ok) alert(j.message || j.error);
-  refresh();
+  const j = await (await post("/api/run", {step})).json();
+  toast(j.ok ? "Started — follow it under Activity on Home" : (j.message || j.error)); refresh();
 });
-$("stop").onclick = () => post("/api/stop");
-$("apstop").onclick = () => post("/api/stop");
-$("apstart").onclick = async () => {
-  const r = await post("/api/run", {step: "autopilot", hours: $("aphours").value});
-  const j = await r.json();
-  if (!j.ok) alert(j.message || j.error);
-  refresh();
+$("backend").onchange = async () => {
+  const j = await (await post("/api/backend", {backend: $("backend").value})).json();
+  toast(j.ok ? "Saved. Only what's left uses the new AI." : (j.error || "Couldn't switch")); refresh();
 };
-
-let running = false;
-async function refresh() {
-  const s = await (await fetch("/api/status")).json();
-  if (s.error) { $("lib").textContent = s.error; return; }
-  running = s.job.running;
-  const aiName = {gemini: "Gemini", "claude-code": "Claude subscription", claude: "Claude API"}[s.backend] || s.backend;
-  $("lib").textContent = `${s.library} · ${aiName} ${s.model}`;
-  const sel = $("backend");
-  if (document.activeElement !== sel) {
-    sel.innerHTML = Object.entries(s.backends || {}).map(([k, v]) =>
-      `<option value="${esc(k)}"${k === s.backend ? " selected" : ""}>${esc(v)}</option>`).join("");
-  }
-  sel.disabled = running || ["running", "waiting"].includes((s.autopilot || {}).status);
-  const keyRow = s.backend === "claude-code"
-    ? `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>Claude Code login</span><b>${s.key_present ? "logged in" : "not logged in"}</b></div>` +
-      (s.key_present ? "" : `<div class="note">${esc((s.login || {}).error || "")}. In a terminal run <code>claude</code>, type <code>/login</code> and sign in with your Claude account, then click Check.</div>`)
-    : `<div class="row"><span><span class="dot ${s.key_present ? "ok" : "bad"}"></span>${esc(s.key_env)}</span><b>${s.key_present ? "found" : "missing"}</b></div>` +
-      (s.key_present ? "" : `<div class="note">Quit, run <code>export ${esc(s.key_env)}=your-key</code> in the terminal, then <code>crag ui</code> again.</div>`);
-  $("setup").innerHTML = keyRow +
-    s.roots.map(r => `<div class="row"><span><span class="dot ${r.mounted ? "ok" : "warn"}"></span>${esc(r.name)} <span class="chip">${esc(r.kind)}</span></span><b>${r.mounted ? "mounted" : "not plugged in"}</b></div>`).join("");
-  const m = s.media, total = m.videos + m.photos, req = s.requests || {};
-  $("counts").innerHTML = [
-    ["Videos", `${m.videos} (${m.hours} h)`], ["Photos", m.photos], ["Duplicates skipped", m.duplicates],
-    ["Prepared", `${m.prepped} / ${total}`], ["Analysed", `${m.described} / ${total}`], ["Moments indexed", s.moments],
-    ["AI requests waiting", (req.pending || 0) + (req.submitted || 0)], ["Failed / blocked", `${req.error || 0} / ${req.refused || 0}`],
-    ["Files with errors", m.errors],
-  ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${esc(v)}</b></div>`).join("");
-  const fl = s.failures || [];
-  $("failbox").style.display = fl.length ? "" : "none";
-  $("fails").innerHTML = fl.map(f => `<div style="padding:6px 0;border-top:1px solid var(--line)">
-      <b>${esc(f.file || f.request)}</b> <span class="chip">${esc(f.status)}</span>
-      ${f.duration_s != null ? `<span class="chip">${f.duration_s}s · ${f.size_mb} MB</span>` : ""}
-      <div class="note" style="margin-top:2px;color:var(--bad)">${esc(f.error)}</div></div>`).join("");
-  if (s.spent) $("cost").innerHTML = `<div class="row"><span>Spent so far</span><b>$${s.spent.usd.toFixed(2)}</b></div>
-     <div class="row"><span>Tokens in / out</span><b>${(s.spent.input_tokens/1e6).toFixed(2)}M / ${(s.spent.output_tokens/1e6).toFixed(2)}M</b></div>`;
-  document.querySelectorAll("button[data-step]").forEach(b => b.disabled = running);
-  const ap = s.autopilot || {}, pr = ap.progress;
-  const label = {running: "🟢 Running", waiting: "⏸ Waiting", finished: "✅ Finished", stopped: "⏹ Stopped", "needs attention": "⚠️ Needs attention",
-                 error: "❌ Error", interrupted: "⚠️ Interrupted — click Start to resume"}[ap.status] || "Not started yet";
-  $("apstate").innerHTML = `<b>${label}</b>` +
-    (ap.phase && ["running", "waiting"].includes(ap.status) ? ` · step: <b>${esc(ap.phase)}</b>${ap.round > 1 ? ` (round ${ap.round})` : ""}` : "") +
-    (ap.waiting_until ? `<div class="note">until ${esc(ap.waiting_until.slice(11, 16))}: ${esc(ap.message || "")}</div>` :
-     (ap.message ? `<div class="note">${esc(ap.message)}</div>` : "")) +
-    (pr ? `<div class="note">${pr.done} / ${pr.total}${pr.eta ? ` · done around ${pr.eta}` : ""}</div>` : "");
-  $("apbar").style.display = pr ? "" : "none";
-  if (pr) $("apfill").style.width = `${Math.round(100 * pr.done / Math.max(1, pr.total))}%`;
-  $("apstart").disabled = running;
-  $("apstart").textContent = ap.status === "interrupted" ? "Resume Autopilot" : "Start Autopilot";
-  $("apstop").disabled = !(running || ["running", "waiting"].includes(ap.status));
-  $("stop").disabled = !running;
-}
-
-let logNext = 0;
-async function pollLog() {
-  const j = await (await fetch(`/api/log?since=${logNext}`)).json();
-  if (j.lines.length) {
-    const el = $("log"), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
-    el.textContent += j.lines.join("\n") + "\n";
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }
-  logNext = j.next;
-  if (j.running !== running) refresh();
-}
-
+$("checkKey").onclick = async () => {
+  $("models").textContent = "Checking…";
+  const j = await (await fetch("/api/models")).json();
+  if (j.error) { $("models").textContent = "Not working: " + j.error; return; }
+  const has = j.models.includes(j.configured);
+  $("models").textContent = has ? `Working. Using ${j.configured}.` :
+    `Connected, but ${j.configured} isn't available. Options: ${j.models.filter(m => /flash|opus|sonnet|haiku/.test(m)).slice(0, 8).join(", ")}`;
+};
 $("estimate").onclick = async () => {
-  $("est").textContent = "calculating…";
+  $("est").textContent = "Calculating…";
   const e = await (await fetch("/api/estimate")).json();
   if (e.error) { $("est").textContent = e.error; return; }
-  $("est").innerHTML = e.note
-    ? `${e.requests} requests with ${esc(e.model)} — ${esc(e.note)}`
-    : e.usd !== undefined
-    ? `${e.requests} requests · ${e.video_hours} h video · ${e.photos} photos → about <b>$${e.usd}</b> with ${esc(e.model)} (rough estimate)`
-    : `${e.requests} requests → about <b>$${e.usd_batch}</b> (batch) with ${esc(e.model)}`;
+  $("est").textContent = e.note ? `${fmt(e.requests)} requests — ${e.note}`
+    : e.usd !== undefined ? `About $${e.usd} for ${fmt(e.requests)} requests (${e.video_hours} h of video, ${fmt(e.photos)} photos)`
+    : `About $${e.usd_batch} for ${fmt(e.requests)} requests`;
 };
 
-$("backend").onchange = async () => {
-  const r = await post("/api/backend", {backend: $("backend").value});
-  const j = await r.json();
-  $("backendnote").textContent = j.ok ? "Saved to contentrag.toml. Already analysed footage is kept; only what's left uses the new AI." : (j.error || "couldn't switch");
-  refresh();
-};
-
-$("checkKey").onclick = async () => {
-  $("models").textContent = "checking…";
-  const j = await (await fetch("/api/models")).json();
-  if (j.error) { $("models").textContent = "✗ " + j.error; return; }
-  if (!j.models.some(m => /flash/.test(m))) {
-    refresh();
-    $("models").innerHTML = `Model <b>${esc(j.configured)}</b> (set in [claude_code] model; options: ${j.models.map(m => `<span class="chip">${esc(m)}</span>`).join(" ")})`;
-    return;
-  }
-  const flash = j.models.filter(m => /flash/.test(m)).slice(0, 12);
-  const has = j.models.includes(j.configured);
-  $("models").innerHTML = `✓ Key works. Configured model <b>${esc(j.configured)}</b> ${has ? "is available" : "was NOT found — pick one below and set it in contentrag.toml"}.<br>Flash models: ${flash.map(m => `<span class="chip">${esc(m)}</span>`).join(" ")}`;
-};
-
+/* ------------------------------------------------------------- search */
+const selected = new Set();
 $("sf").onsubmit = async (e) => {
   e.preventDefault();
   const p = new URLSearchParams({q: $("q").value, limit: 60});
   for (const k of ["orientation", "min_broll", "root", "kind", "from", "to", "collection", "role"]) if ($(k).value) p.set(k, $(k).value);
   if ($("fresh").checked) p.set("fresh", "1");
   if ($("noshaky").checked) p.set("exclude", "shaky,blurry");
-  $("results").innerHTML = `<div class="empty">searching…</div>`;
+  $("results").innerHTML = `<div class="empty">Searching…</div>`;
   const j = await (await fetch("/api/search?" + p)).json();
   if (j.error) { $("results").innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
-  if (!j.results.length) { $("results").innerHTML = `<div class="empty">No matches yet. Has the "Analyse with AI" step run?</div>`; return; }
+  if (!j.results.length) { $("results").innerHTML = `<div class="empty">Nothing found. Try other words, or fewer filters.</div>`; return; }
   window._results = j.results;
   $("results").innerHTML = j.results.map((r, i) => `
-    <div class="card" data-i="${i}">
-      ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy" alt="">` : ""}
-      <div class="b"><label onclick="event.stopPropagation()" style="float:right"><input type="checkbox" class="sel" data-id="${r.moment_id}" ${selected.has(r.moment_id) ? "checked" : ""}> pick</label>
-      <span class="chip">m${r.moment_id}</span> <b>${esc(r.in_out)}</b> <span class="chip">B-roll ${r.broll_score}/5</span>${r.hook_score >= 3 ? `<span class="chip">hook ${r.hook_score}</span>` : ""}<span class="chip">${esc(r.orientation || "")}</span>${r.uses ? `<span class="chip" title="${esc(r.used_in.join(", "))}">used ×${r.uses}</span>` : ""}${r.trimmed_for_privacy ? `<span class="chip" title="part with a hidden person removed">trimmed</span>` : ""}
-      <div class="t">${esc((r.roles || []).join(" · "))}${r.collection ? " · " + esc(r.collection) : ""}</div>
-      ${r.story_seed ? `<div class="t">💡 ${esc(r.story_seed)}</div>` : ""}
-      <div>${esc(r.description)}</div><div class="t">${esc((r.taken_at || "").slice(0, 10))} ${esc(r.place || "")}</div></div>
-    </div>`).join("");
+    <article class="result" data-i="${i}">
+      <div class="thumb">${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy" alt="">` : ""}
+        <span class="pick ${selected.has(r.moment_id) ? "on" : ""}" data-id="${r.moment_id}" title="Select for export" role="checkbox" aria-checked="${selected.has(r.moment_id)}"></span>
+        <span class="time">${esc(r.in_out)}</span></div>
+      <div class="body">
+        <div class="desc">${esc(r.description)}</div>
+        <div class="badges">${(r.roles || []).slice(0, 3).map(x => `<span class="badge blue">${esc(x.replace(/_/g, " "))}</span>`).join("")}
+          ${r.hook_score >= 4 ? `<span class="badge">Hook ${r.hook_score}/5</span>` : ""}
+          ${r.uses ? `<span class="badge" title="${esc(r.used_in.join(", "))}">Used ×${r.uses}</span>` : ""}
+          ${r.trimmed_for_privacy ? `<span class="badge red">Trimmed</span>` : ""}</div>
+        ${r.story_seed ? `<div class="small muted">💡 ${esc(r.story_seed)}</div>` : ""}
+        <div class="where">${esc((r.taken_at || "").slice(0, 10))}${r.place ? " · " + esc(r.place) : ""}${r.collection ? " · " + esc(r.collection) : ""}</div>
+      </div>
+    </article>`).join("");
 };
-
-const selected = new Set();
 function updateSel() {
-  $("selbar").style.display = selected.size ? "flex" : "none";
+  $("selbar").hidden = !selected.size;
   $("selcount").textContent = `${selected.size} selected`;
 }
-$("results").addEventListener("change", (e) => {
-  if (!e.target.classList.contains("sel")) return;
-  const id = +e.target.dataset.id;
-  e.target.checked ? selected.add(id) : selected.delete(id);
-  updateSel();
-});
-$("clearsel").onclick = () => { selected.clear(); document.querySelectorAll(".sel").forEach(c => c.checked = false); updateSel(); };
-$("export").onclick = async () => {
-  const name = prompt("Name for this export folder:", "my-reel");
-  if (!name) return;
-  const r = await post("/api/run", {step: "pull", ids: [...selected].map(i => "m" + i), name});
-  const j = await r.json();
-  if (!j.ok) alert(j.message || j.error); else alert("Exporting — watch the Activity box. Files go to library/exports/" + name);
-};
 $("results").addEventListener("click", (e) => {
-  if (e.target.closest("label")) return;
-  const card = e.target.closest(".card");
+  const pick = e.target.closest(".pick");
+  if (pick) {
+    const id = +pick.dataset.id;
+    selected.has(id) ? selected.delete(id) : selected.add(id);
+    pick.classList.toggle("on", selected.has(id)); pick.setAttribute("aria-checked", selected.has(id));
+    updateSel(); return;
+  }
+  const card = e.target.closest(".result");
   if (!card) return;
-  const r = window._results[+card.dataset.i];
-  const v = $("video");
-  if (r.kind === "video") {
-    v.style.display = "";
-    v.src = `${r.media_url}#t=${r.start},${r.end}`;
-    v.play().catch(() => {});
-  } else { v.pause(); v.removeAttribute("src"); v.style.display = "none"; }
-  $("pinfo").innerHTML = `<b>${esc(r.clip_title || "")}</b> · ${esc(r.in_out)} · ${esc((r.taken_at || "").slice(0, 16))} ${esc(r.place || "")}
-    <p>${esc(r.description)}</p>${r.speech_en ? `<p>“${esc(r.speech_en)}”</p>` : ""}
-    <div>${(r.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>
-    <p><code>${esc(r.file)}</code></p>` + (r.kind === "photo" && r.thumb_url ? `<img src="${r.thumb_url}" style="max-width:100%">` : "");
+  const r = window._results[+card.dataset.i], v = $("video");
+  if (r.kind === "video") { v.hidden = false; v.src = `${r.media_url}#t=${r.start},${r.end}`; v.play().catch(() => {}); }
+  else { v.pause(); v.removeAttribute("src"); v.hidden = true; }
+  $("pinfo").innerHTML = `${r.kind === "photo" && r.thumb_url ? `<img class="photo" src="${r.thumb_url}" alt="">` : ""}
+    <h2 style="margin:0;font-size:21px">${esc(r.clip_title || r.description)}</h2>
+    <div class="muted small">${esc(r.in_out)} · ${esc((r.taken_at || "").slice(0, 16).replace("T", " "))}${r.place ? " · " + esc(r.place) : ""}</div>
+    <div>${esc(r.description)}</div>${r.speech_en ? `<div class="muted">“${esc(r.speech_en)}”</div>` : ""}
+    <div class="badges">${(r.tags || []).slice(0, 12).map(t => `<span class="badge">${esc(t)}</span>`).join("")}</div>
+    <code>${esc(r.file)}</code>`;
   $("player").showModal();
 });
 $("player").addEventListener("close", () => $("video").pause());
+$("clearsel").onclick = () => { selected.clear(); document.querySelectorAll(".pick.on").forEach(p => p.classList.remove("on")); updateSel(); };
+$("export").onclick = async () => {
+  const name = prompt("Name this export:", "my-reel");
+  if (!name) return;
+  const j = await (await post("/api/run", {step: "pull", ids: [...selected].map(i => "m" + i), name})).json();
+  toast(j.ok ? `Exporting to library/exports/${name}` : (j.message || j.error));
+};
 
-let peopleShown = 30;
-function personRow(p) {
-  return `<div style="display:flex;gap:8px;align-items:center">
-      ${p.sample_url ? `<img src="${p.sample_url}" loading="lazy" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex:none">` : ""}
-      <input data-pid="${p.id}" class="pname" value="${esc(p.name || "")}" placeholder="#${p.id} name" style="flex:1;min-width:0">
-      <span class="chip">${p.clips} clips</span>
-      <button data-hide="${p.id}" data-on="${p.hidden ? 0 : 1}">${p.hidden ? "Unhide" : "Hide"}</button></div>`;
-}
+/* ------------------------------------------------------------- people */
+let peopleData = null, unnamedShown = 12, peopleFilter = "";
+const openPeople = new Set();
+const avatar = (url, cls = "") => url ? `<img class="avatar ${cls}" src="${url}" loading="lazy" alt="">` : `<span class="avatar ${cls}"></span>`;
 async function loadPeople() {
-  const j = await (await fetch("/api/people?limit=5000")).json();
-  const el = $("people");
-  if (!j.people || !j.people.length) { el.innerHTML = `<div class="note">None yet — run "Group faces".</div>`; return; }
-  const keepScroll = el.scrollTop, wasOpen = !!(el.querySelector("details") || {}).open;
-  const todo = j.people.filter(p => !p.name && !p.hidden);
-  const done = j.people.filter(p => p.name || p.hidden);
-  el.innerHTML =
-    `<div class="note">To name: <b>${todo.length}</b> (biggest groups first) · named or hidden: <b>${done.length}</b>.
-       Typing a name that already exists merges the two groups.</div>` +
-    todo.slice(0, peopleShown).map(personRow).join("") +
-    (todo.length > peopleShown ? `<button id="peopleMore">Show ${Math.min(30, todo.length - peopleShown)} more (${todo.length - peopleShown} left)</button>` : "") +
-    (done.length ? `<details${wasOpen ? " open" : ""}><summary>Named &amp; hidden (${done.length})</summary>
-       <div style="display:grid;gap:6px;margin-top:6px">${done.map(personRow).join("")}</div></details>` : "");
-  el.scrollTop = keepScroll;
+  try { peopleData = await (await fetch("/api/people")).json(); } catch { return; }
+  renderPeople();
 }
-$("people").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.classList.contains("pname")) e.target.blur();
+function renderPeople() {
+  const d = peopleData, el = $("peopleBody");
+  if (!d || (!d.persons.length && !d.unnamed.length)) {
+    el.innerHTML = `<div class="card"><h2>No faces yet</h2><p class="lede">Faces are found automatically by Autopilot, or run “Find faces” in Settings.</p></div>`;
+    return;
+  }
+  const f = peopleFilter.toLowerCase();
+  const persons = d.persons.filter(p => !f || p.name.toLowerCase().includes(f));
+  const unnamed = d.unnamed;
+  el.innerHTML = `
+    <div class="toolbar">
+      <input class="field" id="pfilter" type="search" placeholder="Find a person" value="${esc(peopleFilter)}">
+      <span class="muted small">${d.persons.length} people · ${unnamed.length} faces to name</span>
+    </div>
+    ${unnamed.length ? `
+      <div><div class="section-title" style="margin-top:4px">Who is this?</div>
+      <div class="face-grid">${unnamed.slice(0, unnamedShown).map(g => `
+        <div class="face">${avatar(g.sample_url)}
+          <input class="field" data-group="${g.id}" placeholder="Add a name" aria-label="Name">
+          <div class="meta"><span class="muted small">${fmt(g.clips)} clips</span>
+            <button class="btn plain small" type="button" data-ghide="${g.id}" data-on="1">Hide</button></div></div>`).join("")}</div>
+      ${unnamed.length > unnamedShown ? `<div style="text-align:center;margin-top:14px"><button class="btn" type="button" id="moreFaces">Show more (${unnamed.length - unnamedShown} left)</button></div>` : ""}</div>` : ""}
+    <div><div class="section-title">People</div>
+    <div class="list">${persons.length ? persons.map(personRow).join("") : `<div class="item"><span class="muted">No one with that name.</span></div>`}</div>
+    <div class="tiny muted" style="margin:10px 4px 0">Open a person to see the separate face groups under their name. Rename a group to move it to someone else,
+      or clear its name to send it back to “Who is this?”. Hidden people never appear in search, exports or edits — only the moments they're in are removed.</div></div>`;
+}
+function personRow(p) {
+  const multi = p.groups.length > 1;
+  return `<details data-person="${esc(p.name)}"${openPeople.has(p.name) ? " open" : ""}>
+    <summary class="item">${avatar(p.sample_url, "lg")}
+      <div class="grow"><div class="title">${esc(p.name)}</div>
+        <div class="sub">${fmt(p.clips)} clips · ${p.groups.length} face group${multi ? "s" : ""}${p.partly_hidden ? " · partly hidden" : ""}</div></div>
+      ${p.hidden ? `<span class="badge red">Hidden</span>` : ""}
+      <span class="chev"></span></summary>
+    <div class="sublist">
+      <div class="item"><div class="grow"><div class="sub">Name</div>
+        <input class="name-input" data-rename="${esc(p.name)}" value="${esc(p.name)}" aria-label="Name"></div>
+        <button class="btn small ${p.hidden ? "" : "danger"}" type="button" data-phide="${esc(p.name)}" data-on="${p.hidden ? 0 : 1}">${p.hidden ? "Unhide" : "Hide everywhere"}</button></div>
+      ${p.groups.map(g => `
+      <div class="item">${avatar(g.sample_url)}
+        <div class="grow"><input class="name-input" data-group="${g.id}" value="${esc(g.name || "")}" placeholder="Add a name" aria-label="Name of this face group">
+          <div class="sub">${fmt(g.clips)} clips · ${fmt(g.faces)} faces${g.hidden ? " · hidden" : ""}</div></div>
+        ${g.faces >= 6 ? `<button class="btn small" type="button" data-split="${g.id}" title="Separate different people inside this group">Separate faces</button>` : ""}
+        <button class="btn plain small" type="button" data-ghide="${g.id}" data-on="${g.hidden ? 0 : 1}">${g.hidden ? "Unhide" : "Hide"}</button>
+      </div>`).join("")}</div>
+  </details>`;
+}
+const people = $("peopleBody");
+people.addEventListener("toggle", (e) => {
+  const d = e.target.closest("details[data-person]");
+  if (d) d.open ? openPeople.add(d.dataset.person) : openPeople.delete(d.dataset.person);
+}, true);
+people.addEventListener("input", (e) => {
+  if (e.target.id === "pfilter") { peopleFilter = e.target.value; const pos = e.target.selectionStart; renderPeople();
+    const f = $("pfilter"); f.focus(); f.setSelectionRange(pos, pos); }
 });
-$("people").addEventListener("change", async (e) => {
-  if (!e.target.classList.contains("pname") || !e.target.value.trim()) return;
-  await post("/api/people", {id: +e.target.dataset.pid, name: e.target.value.trim()});
+people.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches(".name-input, [data-group]")) { e.preventDefault(); e.target.blur(); }
+});
+people.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.dataset.rename !== undefined) {
+    const name = t.value.trim();
+    if (!name) { t.value = t.dataset.rename; return toast("A person needs a name. To un-name one face group, open the person."); }
+    if (name === t.dataset.rename) return;
+    await post("/api/people", {rename: t.dataset.rename, name});
+    if (openPeople.delete(t.dataset.rename)) openPeople.add(name);
+    toast(`Renamed to ${name}`);
+  } else if (t.dataset.group) {
+    await post("/api/people", {id: +t.dataset.group, name: t.value.trim()});
+    toast(t.value.trim() ? `Saved as ${t.value.trim()}` : "Moved back to “Who is this?”");
+  } else return;
   loadPeople();
 });
-$("people").addEventListener("click", async (e) => {
-  if (e.target.id === "peopleMore") { peopleShown += 30; loadPeople(); return; }
-  const id = e.target.dataset.hide;
-  if (!id) return;
-  const on = e.target.dataset.on === "1";
-  if (on && !confirm("Hide this person everywhere? Their clips are rechecked second by second (can take a while).")) return;
-  const r = await (await post("/api/people", {id: +id, hide: on})).json();
-  if (r.ok === false) alert(r.message || r.error);
-  setTimeout(loadPeople, 500);
+people.addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.id === "moreFaces") { unnamedShown += 24; return renderPeople(); }
+  if (b.dataset.split) {
+    b.disabled = true; b.textContent = "Separating…";
+    const j = await (await post("/api/people", {split: +b.dataset.split})).json();
+    toast(j.groups && j.groups.length > 1 ? `Separated into ${j.groups.length} face groups — rename the ones that are someone else`
+                                          : "These faces all look like the same person");
+    return loadPeople();
+  }
+  const on = b.dataset.on === "1";
+  if (b.dataset.phide !== undefined) {
+    if (on && !confirm(`Hide ${b.dataset.phide} everywhere? Moments they appear in are removed from search, exports and edits.`)) return;
+    const j = await (await post("/api/people", {person: b.dataset.phide, hide: on})).json();
+    toast(j.message || (on ? "Hidden" : "Visible again")); return loadPeople();
+  }
+  if (b.dataset.ghide) {
+    if (on && !confirm("Hide this face group everywhere?")) return;
+    const j = await (await post("/api/people", {id: +b.dataset.ghide, hide: on})).json();
+    toast(j.message || (on ? "Hidden" : "Visible again")); return loadPeople();
+  }
 });
 
+/* ------------------------------------------------------------- start */
+showTab((location.hash || "#home").slice(1));
 refresh();
-loadPeople();
 setInterval(pollLog, 1500);
 setInterval(refresh, 5000);
 </script>
