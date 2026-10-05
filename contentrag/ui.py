@@ -454,7 +454,19 @@ def make_handler(cfg: Config, job: Job):
 def serve(cfg: Config, port: int = 8765, open_browser: bool = True) -> None:
     connect(cfg.db_path).close()  # create the database on first run
     job = Job(cfg)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(cfg, job))
+    server = None
+    for p in range(port, port + 10):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", p), make_handler(cfg, job))
+            break
+        except OSError:  # address in use: usually a dashboard still running in another window
+            if p == port:
+                print(f"Port {port} is busy: another dashboard (crag ui) is probably still running in another "
+                      f"Terminal window. Press Ctrl+C there to stop it (it may be an older version), or run\n"
+                      f"  lsof -ti :{port} | xargs kill\nto stop it from here. Starting on the next free port instead.")
+    if server is None:
+        raise SystemExit(f"Ports {port}-{port + 9} are all busy; close other dashboards and try again.")
+    port = server.server_address[1]
     url = f"http://127.0.0.1:{port}"
     print(f"Content-RAG dashboard: {url}  (Ctrl+C to quit)")
     if open_browser:
