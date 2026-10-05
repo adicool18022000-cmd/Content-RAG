@@ -57,7 +57,6 @@ class Config:
     scene_detect: bool = True
     workers: int = 4
     faces_enabled: bool = True
-    privacy_mode: str = "cut"  # clips with a hidden person: "cut" their moments out, or "blur" their faces
     embed_model: str = "BAAI/bge-m3"
     source: Path | None = field(default=None, repr=False)
 
@@ -155,23 +154,9 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         scene_detect=bool(p.get("scene_detect", Config.scene_detect)),
         workers=int(p.get("workers", Config.workers)),
         faces_enabled=bool(raw.get("faces", {}).get("enabled", Config.faces_enabled)),
-        privacy_mode=_privacy_mode(os.environ.get("CRAG_PRIVACY")
-                                   or raw.get("privacy", {}).get("hidden_people", Config.privacy_mode)),
         embed_model=e.get("model", Config.embed_model),
         source=path,
     )
-
-
-PRIVACY_MODES = {
-    "cut": "Cut out the moments they're in (the rest of the clip stays usable)",
-    "blur": "Keep the clip and blur their face",
-}
-
-
-def _privacy_mode(value: str) -> str:
-    if value not in PRIVACY_MODES:
-        raise SystemExit("[privacy] hidden_people must be 'cut' or 'blur'.")
-    return value
 
 
 def set_value(path: str | os.PathLike, section: str, key: str, value: str) -> None:

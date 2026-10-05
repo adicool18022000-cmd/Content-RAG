@@ -13,7 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ..pull import _encoder, cut_clip
+from ..pull import _encoder, blur_filter, cut_clip
 from .plan import Caption, EditPlan
 
 
@@ -36,8 +36,7 @@ def materialize(plan: EditPlan, out_dir: Path, log=print) -> list[dict]:
         if not out.exists():
             ok, err = cut_clip(Path(c.file), c.src_in, c.src_out, out,
                                reframe="crop" if c.track != "broll" else (c.reframe or "crop"),
-                               fps=plan.fps, audio=want_audio, width=plan.width, height=plan.height,
-                               blur=[tuple(b) for b in c.blur])
+                               fps=plan.fps, audio=want_audio, width=plan.width, height=plan.height)
             if not ok:
                 raise RuntimeError(f"couldn't cut {Path(c.file).name} {c.src_in}-{c.src_out}: {err}")
         pieces.append({"index": i, "path": out, "audio": want_audio and _has_audio(out)})
@@ -138,6 +137,9 @@ def render_mp4(plan: EditPlan, out_dir: Path, pieces: list[dict], out_name: str 
                          f"eof_action=pass:shortest=0:repeatlast=0[o{j}]")
             cur = f"o{j}"
             continue
+        if c.blur:  # hidden people's faces: blurred here, in the preview only (pieces stay untouched)
+            steps, src = blur_filter([(b[0] - c.at, b[1] - c.at, *b[2:]) for b in c.blur], src, tag=f"c{j}")
+            graph += steps
         if c.track == "overlay":  # other modes: dark parts transparent
             src += (f"scale={W}:{H},setsar=1,format=rgba,colorkey=0x000000:0.28:0.25,"
                     f"colorchannelmixer=aa={max(0.0, min(1.0, c.volume)):.2f},")

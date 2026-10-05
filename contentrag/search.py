@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .config import Config
 from .db import jloads
-from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person, safe_parts, uses_of
+from .usage import (collection_hidden, hidden_people_in, hidden_ranges, hidden_sets, photo_has_hidden_person,
+                    safe_parts, uses_of)
 from .util import fmt_ts, source_path
 
 USE_PENALTY = 0.6  # each earlier use pushes a moment down; it never hides it
@@ -37,7 +38,7 @@ class Filters:
     max_motion: int | None = None
     fresh: bool = False                 # only moments never used in a video
     include_hidden: bool = False
-    privacy: str | None = None          # cut | blur (default: [privacy] hidden_people in contentrag.toml)
+    held_back: bool = False             # ONLY the moments left out because a hidden person is in them
 
 
 def fts_query(text: str) -> str | None:
@@ -144,33 +145,38 @@ def search(cfg: Config, conn, query: str = "", filters: Filters | None = None, l
     hidden = hidden_sets(conn) if not filters.include_hidden else {k: set() for k in ("moment", "media",
                                                                                     "collection", "person")}
     ranges_cache: dict[str, list] = {}
-    privacy = filters.privacy or cfg.privacy_mode
     for r in rows:
         if str(r["id"]) in hidden["moment"] or r["media_id"] in hidden["media"] \
                 or collection_hidden(r["collection"], hidden["collection"]):
             continue
-        start, end, trimmed, blur = r["start"], r["end"], False, False
+        start, end, trimmed, names = r["start"], r["end"], False, []
         if hidden["person"] and r["kind"] == "photo":
-            if photo_has_hidden_person(conn, r["media_id"], hidden["person"]):
-                continue  # photos with a hidden person are never suggested (in either privacy mode)
+            if filters.held_back or photo_has_hidden_person(conn, r["media_id"], hidden["person"]):
+                continue  # photos with a hidden person are never suggested
         elif hidden["person"]:
             if r["media_id"] not in ranges_cache:
                 ranges_cache[r["media_id"]] = hidden_ranges(conn, r["media_id"], hidden["person"])
             blocked = ranges_cache[r["media_id"]]
-            if blocked and privacy == "blur":
-                blur = any(hs < end and he > start for hs, he in blocked)  # kept whole; faces blurred on export
+            if filters.held_back:
+                # the whole moment, untouched: usable only if the creator asks for it, with faces blurred
+                if not any(hs < end and he > start for hs, he in blocked):
+                    continue
+                names = hidden_people_in(conn, r["media_id"], start, end, hidden["person"])
             elif blocked:
                 parts = safe_parts(start, end, blocked)
                 if not parts:
                     continue  # a hidden person is on screen for the whole moment
                 start, end = max(parts, key=lambda p: p[1] - p[0])
                 trimmed = (start, end) != (r["start"], r["end"])
+        elif filters.held_back:
+            continue
         uses = uses_of(conn, r["media_id"], start, end)
         if filters.fresh and uses:
             continue
         rank = (scores[r["id"]] if scores else 1.0) / (1 + USE_PENALTY * len(uses))
         results.append((rank, -(r["hook_score"] or 0), -(r["broll_score"] or 0),
-                        _result(cfg, conn, r, start, end, trimmed, uses) | {"blur_faces": blur}))
+                        _result(cfg, conn, r, start, end, trimmed, uses)
+                        | ({"held_back": True, "hidden_people": names} if filters.held_back else {})))
     results.sort(key=lambda x: (-x[0], x[1], x[2]))
     return [x[3] for x in results[:limit]]
 

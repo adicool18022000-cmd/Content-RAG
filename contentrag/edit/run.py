@@ -37,7 +37,8 @@ def render_plan(cfg: Config, conn, plan: EditPlan, targets: set[str], log=print)
     d = out_dir(cfg, plan.name)
     blurred = protect_hidden_people(conn, plan)
     if blurred:
-        log(f"[edit] blurring hidden people's faces in {blurred} clip(s)")
+        log(f"[edit] {blurred} clip(s) show a hidden person: their faces get a blur layer in HyperFrames, "
+            "Remotion and the preview (Premiere/After Effects show the original - see EDIT.md)")
     plan_path = plan.save(d / "plan.json")
     fonts = cfg.library_dir / "assets" / "fonts"
     if fonts.is_dir() and any(fonts.iterdir()) and not (d / "fonts").exists():
@@ -50,39 +51,38 @@ def render_plan(cfg: Config, conn, plan: EditPlan, targets: set[str], log=print)
         write_srt(plan.captions, d / "captions.srt")
     if "mp4" in targets:
         out["mp4"] = str(render_mp4(plan, d, pieces, log=log))
-    out.update(export_all(_blurred_sources(plan, pieces), d, pieces, targets))
+    out.update(export_all(plan, d, pieces, targets))
     record_video(conn, plan.name, page=plan.page, style=plan.style, uses=plan.uses())
     _write_readme(plan, d, out)
     return out
 
 
 def protect_hidden_people(conn, plan: EditPlan) -> int:
-    """Safety net, whatever the privacy mode: every library clip in the plan gets the faces of hidden
-    people that are on screen during its range blurred. Returns how many clips need it."""
-    from ..usage import face_boxes, hidden_sets
+    """Every library clip in the plan gets the faces of hidden people that are on screen during its range,
+    as blur boxes on the output timeline (Clip.blur). Search and the planners already leave those parts
+    out; this covers moments the creator explicitly asked to use anyway, and face-check gaps. The blur
+    is a layer in the exports - the footage and the cut pieces stay untouched. Returns how many clips."""
+    from ..usage import BLUR_PAD_SECONDS, face_boxes, frame_box, hidden_people_in, hidden_sets
 
     people = hidden_sets(conn)["person"]
     n = 0
     for c in plan.clips:
-        c.blur = [list(b) for b in face_boxes(conn, c.media_id, c.src_in, c.src_out, people)] \
-            if c.media_id and people else []
-        n += bool(c.blur)
+        c.blur, c.blur_people = [], []
+        if not (c.media_id and people):
+            continue
+        m = conn.execute("SELECT width, height FROM media WHERE id=?", (c.media_id,)).fetchone()
+        sw, sh = (m["width"], m["height"]) if m else (plan.width, plan.height)
+        mode = c.reframe if c.track == "broll" and c.reframe else "crop"
+        for t, *box in face_boxes(conn, c.media_id, c.src_in, c.src_out, people):
+            a = max(c.at, c.at + (t - c.src_in) - BLUR_PAD_SECONDS)
+            b = min(c.end, c.at + (t - c.src_in) + BLUR_PAD_SECONDS)
+            fb = frame_box(tuple(box), sw, sh, plan.width, plan.height, mode)
+            if fb and b - a > 0.02:
+                c.blur.append([round(a, 3), round(b, 3), *fb])
+        if c.blur:
+            c.blur_people = hidden_people_in(conn, c.media_id, c.src_in, c.src_out, people)
+            n += 1
     return n
-
-
-def _blurred_sources(plan: EditPlan, pieces: list[dict]) -> EditPlan:
-    """Premiere / After Effects reference the original footage; for clips that need blurring they must
-    point at the blurred, already cut piece instead, so no unblurred face reaches an export."""
-    import copy
-
-    if not any(c.blur for c in plan.clips):
-        return plan
-    out = copy.deepcopy(plan)
-    by_index = {p["index"]: p for p in pieces}
-    for i, c in enumerate(out.clips):
-        if c.blur and i in by_index:
-            c.file, c.src_in, c.src_out, c.reframe = str(by_index[i]["path"]), 0.0, round(c.length, 3), None
-    return out
 
 
 def _write_readme(plan: EditPlan, d: Path, out: dict) -> None:
@@ -94,6 +94,14 @@ def _write_readme(plan: EditPlan, d: Path, out: dict) -> None:
         if c.track != "overlay":
             lines.append(f"- {c.at:6.2f}s  {c.track:<6} {Path(c.file).name} {c.src_in:.2f}-{c.src_out:.2f}"
                          + (f"  m{c.moment_id}" if c.moment_id else "") + (f"  ({c.note})" if c.note else ""))
+    blurred = [c for c in sorted(plan.clips, key=lambda c: c.at) if c.blur]
+    if blurred:
+        lines += ["", "## Blurred faces (hidden people)",
+                  "Blurred as a layer in HyperFrames, Remotion and preview.mp4 only. The footage is untouched, so "
+                  "Premiere / After Effects show these faces: post from HyperFrames or Remotion, or blur them there."]
+        lines += [f"- {c.at:6.2f}s  {', '.join(c.blur_people) or 'hidden person'} in {Path(c.file).name}"
+                  + (f" m{c.moment_id}" if c.moment_id else "")
+                  + f": {min(b[0] for b in c.blur):.2f}-{max(b[1] for b in c.blur):.2f}s" for c in blurred]
     if plan.shoot_list:
         lines += ["", "## Shoot list (no good footage yet)", *[f"- {s}" for s in plan.shoot_list]]
     lines += ["", "## Files", *[f"- {k}: {v}" for k, v in out.items() if k in ALL_TARGETS or k == "plan"],

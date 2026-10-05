@@ -54,6 +54,15 @@ high-motion footage; the first shot is the strongest hook. Review/adjust `plan.j
 
 ## Rules
 - Never use hidden people/clips (search and pull already exclude them; don't re-add them by hand).
+  The one exception: a held-back moment (`crag search ... --held-back --json`, a hidden person is
+  in it) that the user explicitly approved in chat, for this video. Put it into `plan.json` like any
+  swap (`file/src_in/src_out/media_id/moment_id` from the search result), then `crag edit render`.
+  The render adds `blur` boxes to that clip automatically. Their face is blurred as a layer in
+  HyperFrames (`.face-blur` divs) and Remotion (`blur` in src/plan.json), plus preview.mp4. The
+  footage and the cut pieces stay untouched, so Premiere / After Effects show the face. Tell the user
+  to post from HyperFrames / Remotion, and point to "Blurred faces" in EDIT.md. Check the
+  blur in the preview frames, because faces are only checked once per second; if it misses, widen
+  that clip's boxes in plan.json and render again.
 - Prefer footage not used before (`used×N` in search/vault); check `crag videos` for recent reels.
 - Vertical footage first; horizontal is cropped or blurred-fill per style.
 - After posting, record results: `crag videos --posted "<name>" --views N --likes N --saves N

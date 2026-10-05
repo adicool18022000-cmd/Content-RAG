@@ -275,6 +275,11 @@ def export_hyperframes(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Pat
         els.append(f'  <video id="{c.track}-{p["index"]:03d}" class="{cls}"{look} data-start="{c.at:.3f}" '
                    f'data-duration="{c.length:.3f}" data-track-index="{order[c.track]}"{audio} '
                    f'src="media/{p["path"].name}" playsinline></video>')
+    for c in plan.clips:  # hidden people's faces: a blur layer over the picture, the footage is untouched
+        for a, b, x, y, w, h in c.blur:
+            els.append(f'  <div class="clip face-blur" data-start="{a:.3f}" data-duration="{b - a:.3f}" '
+                       f'data-track-index="4" style="left:{x * 100:.2f}%;top:{y * 100:.2f}%;'
+                       f'width:{w * 100:.2f}%;height:{h * 100:.2f}%"></div>')
     for k, s in enumerate(plan.sounds):
         length = (s.src_out - s.src_in) if s.src_out else _sound_length(media / snd[k])
         length = min(length or 0.1, max(0.1, plan.duration - s.at))
@@ -305,6 +310,9 @@ def export_hyperframes(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Pat
             filter: {_css_filter(plan.grade)}; }}
   #stage video.clip {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }}
   #stage .leak {{ mix-blend-mode: screen; }}
+  #stage .face-blur {{ position: absolute; z-index: 5; border-radius: 22%; overflow: hidden;
+                       -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); }}
+  #stage .cap {{ z-index: 10; }}
   #stage .cap {{ position: absolute; left: 60px; right: 60px; top: {float(cs.get('position', 0.68)) * 100:.1f}%;
                  transform: translateY(-50%); text-align: center; font-family: '{font}', sans-serif;
                  font-weight: 800; font-size: {int(cs.get('size', 74))}px; line-height: 1.05; color: {cs.get('color', '#FFFFFF')};
@@ -365,6 +373,13 @@ export const Edit: React.FC = () => {
                 opacity: c.track === 'overlay' ? c.volume : 1}} />
           </Sequence>
         ))}
+        {(plan.blur || []).map((b: any, i: number) => (
+          <Sequence key={`b${i}`} from={f(b.from)} durationInFrames={Math.max(1, f(b.to) - f(b.from))}>
+            <div style={{position: 'absolute', left: `${b.x * 100}%`, top: `${b.y * 100}%`,
+              width: `${b.w * 100}%`, height: `${b.h * 100}%`, borderRadius: '22%', overflow: 'hidden',
+              backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)'}} />
+          </Sequence>
+        ))}
       </AbsoluteFill>
       {plan.sounds.map((s: any, i: number) => (
         <Sequence key={`s${i}`} from={f(s.at)} durationInFrames={Math.max(1, f(s.length))}>
@@ -417,6 +432,9 @@ def export_remotion(plan: EditPlan, out_dir: Path, pieces: list[dict]) -> Path:
     plan.fix_duration()
     data = {"name": plan.name, "fps": plan.fps, "width": plan.width, "height": plan.height, "duration": plan.duration,
             "grade": plan.grade, "caption_style": plan.caption_style, "clips": clips, "sounds": sounds,
+            # hidden people's faces (clips the creator asked to use anyway): a blur layer, footage untouched
+            "blur": [{"from": a, "to": b, "x": x, "y": y, "w": w, "h": h}
+                     for c in plan.clips for a, b, x, y, w, h in c.blur],
             "captions": [{"start": c.start, "end": c.end, "text": c.text, "emphasis": c.emphasis} for c in plan.captions]}
     (d / "src" / "plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     (d / "src" / "Edit.tsx").write_text(REMOTION_EDIT, encoding="utf-8")

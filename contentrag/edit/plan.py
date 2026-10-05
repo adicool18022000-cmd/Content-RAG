@@ -28,7 +28,10 @@ class Clip:
     reframe: str | None = None      # crop | blur (for horizontal footage in a 9:16 reel)
     blend: str | None = None        # screen | add (overlays such as light leaks)
     note: str = ""                  # why this clip is here (the script line, the beat...)
-    blur: list = field(default_factory=list)  # hidden people's faces to blur: [t (source s), x, y, w, h]
+    # Faces of hidden people inside this clip, blurred as a layer in HyperFrames / Remotion (and the
+    # preview MP4), never in the footage: [from, to (output timeline s), x, y, w, h (fractions of the frame)]
+    blur: list = field(default_factory=list)
+    blur_people: list = field(default_factory=list)  # their names, for EDIT.md
 
     @property
     def length(self) -> float:

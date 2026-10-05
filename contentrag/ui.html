@@ -341,9 +341,10 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
 
     <div class="section-title">Privacy</div>
     <div class="list">
-      <div class="item wrap"><div class="grow" style="flex-basis:220px"><div class="title">Clips with people you've hidden</div>
-        <div class="sub">Photos with them are always left out. Any of their faces still inside an edit or export is blurred.</div></div>
-        <select class="field" id="privacy" style="flex:1 1 260px;max-width:360px" aria-label="Clips with hidden people"></select></div>
+      <div class="item"><div class="grow"><div class="title">People you've hidden</div>
+        <div class="sub">The moments they're in are cut out, and photos with them are never shown. A clip with them is
+        only used if you ask Claude for it in chat; then their face is blurred in the HyperFrames / Remotion
+        export. Your footage is never changed.</div></div></div>
     </div>
 
     <div class="section-title">Cost</div>
@@ -450,9 +451,6 @@ async function refresh() {
   if (document.activeElement !== sel) sel.innerHTML = Object.entries(s.backends || {}).map(([k, v]) =>
     `<option value="${esc(k)}"${k === s.backend ? " selected" : ""}>${esc(v)}</option>`).join("");
   sel.disabled = running || active;
-  const pv = $("privacy");
-  if (document.activeElement !== pv) pv.innerHTML = Object.entries(s.privacy_modes || {}).map(([k, v]) =>
-    `<option value="${esc(k)}"${k === s.privacy_mode ? " selected" : ""}>${esc(v)}</option>`).join("");
   const login = s.backend === "claude-code";
   $("setup").innerHTML = `<div class="item"><span class="dot ${s.key_present ? "green" : "red"}"></span><div class="grow">
       <div class="title">${login ? "Claude Code login" : esc(s.key_env)}</div>
@@ -510,11 +508,6 @@ $("backend").onchange = async () => {
   const j = await (await post("/api/backend", {backend: $("backend").value})).json();
   toast(j.ok ? "Saved. Only what's left uses the new AI." : (j.error || "Couldn't switch")); refresh();
 };
-$("privacy").onchange = async () => {
-  const j = await (await post("/api/privacy", {mode: $("privacy").value})).json();
-  toast(j.ok ? (j.mode === "blur" ? "Clips stay whole — hidden faces get blurred" : "Moments with hidden people are cut out") : (j.error || "Couldn't save"));
-  refresh();
-};
 $("checkKey").onclick = async () => {
   $("models").textContent = "Checking…";
   const j = await (await fetch("/api/models")).json();
@@ -556,7 +549,7 @@ $("sf").onsubmit = async (e) => {
           ${r.hook_score >= 4 ? `<span class="badge">Hook ${r.hook_score}/5</span>` : ""}
           ${r.uses ? `<span class="badge" title="${esc(r.used_in.join(", "))}">Used ×${r.uses}</span>` : ""}
           ${r.trimmed_for_privacy ? `<span class="badge red" title="Part with a hidden person removed">Trimmed</span>` : ""}
-          ${r.blur_faces ? `<span class="badge red" title="A hidden person's face is blurred when exported">Faces blurred</span>` : ""}</div>
+</div>
         ${r.story_seed ? `<div class="small muted">💡 ${esc(r.story_seed)}</div>` : ""}
         <div class="where">${esc((r.taken_at || "").slice(0, 10))}${r.place ? " · " + esc(r.place) : ""}${r.collection ? " · " + esc(r.collection) : ""}</div>
       </div>

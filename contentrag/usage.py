@@ -139,6 +139,34 @@ def face_boxes(conn, media_id: str, start: float, end: float, people: set[str] |
     return out
 
 
+def hidden_people_in(conn, media_id: str, start: float, end: float, people: set[str] | None = None) -> list[str]:
+    """Names of the hidden people on screen between start and end (one name per person)."""
+    people = hidden_sets(conn)["person"] if people is None else people
+    if not people:
+        return []
+    marks = ",".join("?" * len(people))
+    rows = conn.execute(
+        f"SELECT DISTINCT coalesce(p.name, 'person ' || p.id) AS name FROM faces f JOIN people p ON p.id = f.person_id "
+        f"WHERE f.media_id=? AND f.person_id IN ({marks}) AND f.t BETWEEN ? AND ? ORDER BY name",
+        (media_id, *[int(x) for x in people], start - FACE_PAD_SECONDS, end + FACE_PAD_SECONDS)).fetchall()
+    return [r["name"] for r in rows]
+
+
+def frame_box(box: tuple, src_w: int, src_h: int, out_w: int, out_h: int, mode: str | None = "crop") -> tuple | None:
+    """A box (x, y, w, h as fractions of the source picture) as fractions of the reframed output picture.
+    crop = scaled to fill and centre-cropped; blur/fit = scaled to fit and centred."""
+    x, y, w, h = box
+    src_w, src_h = src_w or out_w, src_h or out_h
+    s = (min if mode in ("blur", "fit") else max)(out_w / src_w, out_h / src_h)
+    dx, dy = (out_w - src_w * s) / 2, (out_h - src_h * s) / 2
+    x0, y0 = (x * src_w * s + dx) / out_w, (y * src_h * s + dy) / out_h
+    x1, y1 = ((x + w) * src_w * s + dx) / out_w, ((y + h) * src_h * s + dy) / out_h
+    x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(1.0, x1), min(1.0, y1)
+    if x1 - x0 < 0.005 or y1 - y0 < 0.005:
+        return None  # the face is outside the cropped picture
+    return round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)
+
+
 def photo_has_hidden_person(conn, media_id: str, people: set[str] | None = None) -> bool:
     people = hidden_sets(conn)["person"] if people is None else people
     if not people:

@@ -671,36 +671,42 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
         for s in sel:
             assert s["source_out"] <= 4.0 or s["source_in"] >= 8.0
 
-    # blur mode: the whole moment stays usable and her face is blurred in anything exported
+    # held back: the moments she's in are offered separately (whole, with her name), never by default
     from contentrag.edit.plan import Clip, EditPlan
-    from contentrag.edit.run import _blurred_sources, protect_hidden_people
+    from contentrag.edit.run import protect_hidden_people, render_plan
     from contentrag.usage import face_boxes
+    from contentrag.util import source_path
 
-    cfg.privacy_mode = "blur"
-    res = [r for r in search(cfg, conn, "", Filters(kind="video"), use_vectors=False, limit=200) if r["media_id"] == goa]
-    full = next(r for r in res if r["blur_faces"])
+    held = [r for r in search(cfg, conn, "", Filters(kind="video", held_back=True), use_vectors=False, limit=200)]
+    assert held and all(r["media_id"] == goa and r["held_back"] and r["hidden_people"] == ["Ex"] for r in held)
+    full = held[0]
     assert full["start"] < 8.0 and full["end"] > 4.0 and not full["trimmed_for_privacy"]
     boxes = face_boxes(conn, goa, 0, 12)
     assert boxes and all(0 <= b[1] <= 1 and 0 < b[3] <= 1 and 0 < b[4] <= 1 for b in boxes)
-    out = pull(cfg, conn, [full["moment_id"]], "blurred", log=lambda *_: None)
-    assert out["pulled"] == 1
-    cfg.privacy_mode = "cut"
-    # edits: safety net blurs hidden faces in any clip, and Premiere/AE point at the blurred piece
-    plan = EditPlan("t")
-    plan.clips = [Clip("broll", "orig.mp4", 3.0, 9.0, 0.0, media_id=goa)]
-    assert protect_hidden_people(conn, plan) == 1 and plan.clips[0].blur
-    exp = _blurred_sources(plan, [{"index": 0, "path": Path("piece.mp4")}])
-    assert exp.clips[0].file == "piece.mp4" and exp.clips[0].src_in == 0 and plan.clips[0].file == "orig.mp4"
-    # photos with a hidden person never appear, in either mode
+    # an edit that uses it (only when the creator asked): blur is a layer in the exports, footage untouched
+    src = str(source_path(cfg, conn, goa))
+    plan = EditPlan("blurtest", width=360, height=640, fps=15)
+    plan.clips = [Clip("broll", src, 3.0, 9.0, 0.0, media_id=goa)]
+    assert protect_hidden_people(conn, plan) == 0  # her face is at the far left: the 9:16 crop cuts it off
+    plan.clips[0].reframe = "blur"  # whole picture in frame: now she is visible and gets blurred
+    assert protect_hidden_people(conn, plan) == 1 and plan.clips[0].blur_people == ["Ex"]
+    for fr, to, x, y, w, h in plan.clips[0].blur:
+        assert 0 <= fr < to <= 6.0 and 0 <= x <= 1 and 0 < w <= 1 and 0 < h <= 1
+    out = render_plan(cfg, conn, plan, {"mp4", "hyperframes", "remotion", "premiere"}, log=lambda *_: None)
+    assert Path(out["mp4"]).stat().st_size > 0
+    assert "face-blur" in Path(out["hyperframes"]).read_text()
+    assert json.loads((Path(out["remotion"]) / "src" / "plan.json").read_text())["blur"]
+    assert src in Path(out["premiere"]).read_text() or "goa" in Path(out["premiere"]).read_text()
+    assert "Blurred faces" in (Path(out["folder"]) / "EDIT.md").read_text()
+    # photos with a hidden person never appear
     photo = conn.execute("SELECT id FROM media WHERE kind='photo' LIMIT 1").fetchone()["id"]
     assert any(r["media_id"] == photo for r in search(cfg, conn, "", Filters(kind="photo"), use_vectors=False))
     conn.execute("INSERT INTO faces(media_id, t, x, y, w, h, score, emb, person_id) VALUES (?,0,10,10,50,50,0.9,?,?)",
                  (photo, a.tobytes(), pa))
     conn.commit()
-    for mode in ("cut", "blur"):
-        cfg.privacy_mode = mode
-        assert not any(r["media_id"] == photo for r in search(cfg, conn, "", Filters(kind="photo"), use_vectors=False))
-    cfg.privacy_mode = "cut"
+    for held_back in (False, True):
+        f = Filters(kind="photo", held_back=held_back)
+        assert not any(r["media_id"] == photo for r in search(cfg, conn, "", f, use_vectors=False))
 
 
 def test_collection_notes_and_ideas(env, monkeypatch):

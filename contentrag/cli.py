@@ -120,7 +120,7 @@ def cmd_search(args):
         orientation=args.orientation, min_broll=args.min_broll, date_from=args.date_from, date_to=args.date_to,
         place=args.place, root_kind=args.root, kind=args.kind, min_seconds=args.min_seconds,
         exclude_issues=tuple(args.exclude or ()), collection=args.collection, roles=tuple(args.role or ()),
-        min_hook=args.min_hook, fresh=args.fresh, include_hidden=args.include_hidden,
+        min_hook=args.min_hook, fresh=args.fresh, include_hidden=args.include_hidden, held_back=args.held_back,
     )
     results = search(cfg, conn, args.query or "", f, limit=args.limit, use_vectors=not args.no_vectors)
     if args.json:
@@ -129,7 +129,10 @@ def cmd_search(args):
         for i, r in enumerate(results, 1):
             print(f"{i:>2}. m{r['moment_id']} [{r['in_out']}] B{r['broll_score']} H{r['hook_score'] or '-'} "
                   f"used×{r['uses']} {','.join(r['roles'])} {r['orientation'] or ''} "
-                  f"{(r['taken_at'] or '')[:10]} {r['place'] or ''}\n    {r['description']}\n    {r['file']}")
+                  f"{(r['taken_at'] or '')[:10]} {r['place'] or ''}"
+                  + (f"  [with {', '.join(r['hidden_people']) or 'a hidden person'}: blur only if you ask]"
+                     if r.get("held_back") else "")
+                  + f"\n    {r['description']}\n    {r['file']}")
     if args.html is not None:
         slug = re.sub(r"\W+", "-", args.query or "browse").strip("-")[:50] or "browse"
         out = args.html or str(cfg.library_dir / "searches" / f"{slug}.html")
@@ -317,20 +320,6 @@ def cmd_folders(args):
         print(f"... {len(rows) - args.limit} more (--limit {len(rows)})")
 
 
-def cmd_privacy(args):
-    """Show or set what happens to clips with hidden people (writes [privacy] in contentrag.toml)."""
-    from .config import DEFAULT_CONFIG, PRIVACY_MODES, set_value
-
-    if args.mode:
-        path = Path(args.config or os.environ.get("CONTENTRAG_CONFIG", DEFAULT_CONFIG)).expanduser()
-        set_value(path, "privacy", "hidden_people", args.mode)
-    cfg = load_config(args.config)
-    for k, v in PRIVACY_MODES.items():
-        print(f"{'*' if k == cfg.privacy_mode else ' '} {k:<5} {v}")
-    print("Photos with a hidden person are always left out. Any hidden face still inside a clip that goes into "
-          "an edit or export is blurred.")
-
-
 def cmd_backend(args):
     """Show or switch the AI analysis backend (writes [describe] backend in contentrag.toml)."""
     from .config import BACKENDS, DEFAULT_CONFIG, set_backend
@@ -443,8 +432,6 @@ def cmd_run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crag", description="Personal footage index + Obsidian life vault")
     p.add_argument("-c", "--config", help="path to contentrag.toml (default: ./contentrag.toml)")
-    p.add_argument("--privacy", choices=["cut", "blur"],
-                   help="clips with hidden people, for this command only: cut their moments out, or blur faces")
     p.add_argument("--backend", choices=["gemini", "claude-code", "claude"],
                    help="use this AI backend for this command only (crag backend <name> switches for good)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -483,6 +470,8 @@ def main(argv=None):
     sp.add_argument("--min-hook", type=int)
     sp.add_argument("--fresh", action="store_true", help="only moments never used in a video")
     sp.add_argument("--include-hidden", action="store_true")
+    sp.add_argument("--held-back", action="store_true",
+                    help="only the moments left out because a hidden person is in them (to ask before using, blurred)")
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--json", action="store_true")
     sp.add_argument("--html", nargs="?", const="", help="write an HTML contact sheet (optional path)")
@@ -556,9 +545,6 @@ def main(argv=None):
     sp.add_argument("--under", help="only this folder, one level deeper, e.g. 'Disk D/mobile files'")
     sp.add_argument("--limit", type=int, default=60)
     sp.set_defaults(fn=cmd_folders)
-    sp = sub.add_parser("privacy", help="clips with hidden people: cut their moments out, or blur their faces")
-    sp.add_argument("mode", nargs="?", choices=["cut", "blur"])
-    sp.set_defaults(fn=cmd_privacy)
     sp = sub.add_parser("backend", help="show or switch the AI analysis backend: gemini | claude-code | claude")
     sp.add_argument("name", nargs="?", choices=["gemini", "claude-code", "claude"])
     sp.set_defaults(fn=cmd_backend)
@@ -603,8 +589,6 @@ def main(argv=None):
     args = p.parse_args(argv)
     if args.backend:
         os.environ["CRAG_BACKEND"] = args.backend
-    if args.privacy:
-        os.environ["CRAG_PRIVACY"] = args.privacy
     args.fn(args)
 
 
