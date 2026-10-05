@@ -174,6 +174,16 @@ def _find(name: str, original: str, search: list[Path]) -> Path | None:
 def import_template(cfg: Config, xml_path: Path, media: Path | None = None, log=print) -> dict:
     """Copy a template's plates + SFX into the library and (re)write transitions.json."""
     xml_path = Path(xml_path).expanduser()
+    if xml_path.is_dir():  # a template folder: use the sequence XML inside it
+        found = [x for x in sorted(xml_path.rglob("*.xml")) if not x.name.startswith(".")
+                 and re.search(r"<name>\s*T\d+", x.read_text(errors="ignore"))]
+        if not found:
+            raise SystemExit(f"No template XML with transitions (markers like 'T01 SNAP - CUT') in {xml_path}")
+        if len(found) > 1:
+            log(f"[transitions] {len(found)} template XMLs, using {found[0].name}: "
+                + ", ".join(x.name for x in found[1:]) + " can be imported by name")
+        media = media or xml_path
+        xml_path = found[0]
     recipes, paths = parse_template(xml_path)
     if not recipes:
         raise SystemExit("No transitions found (expected markers named like 'T01 SNAP - CUT').")

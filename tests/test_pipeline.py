@@ -995,6 +995,7 @@ def test_transition_library_from_premiere_template(env, monkeypatch, tmp_path):
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=500:d=2", str(tpl / n)], check=True)
     res = transitions.import_template(cfg, tpl / "fx.xml", log=lambda *_: None)
     assert res["recipes"] == 2 and res["usable"] == 2 and not res["missing"]
+    assert transitions.import_template(cfg, tpl, log=lambda *_: None)["recipes"] == 2  # the folder works too
     lib = {r["id"]: r for r in transitions.load_library(cfg)}
     snap, riser = lib["T01"], lib["T02"]
     assert snap["offset"] == pytest.approx(-0.1) and snap["plate_in"] == pytest.approx(2.8)
@@ -1235,3 +1236,45 @@ def test_split_merged_group(env):
     assert sizes == [10, 10, 10]
     p = next(p for p in people_by_name(conn, 1)["persons"] if p["name"] == "Not important")
     assert len(p["groups"]) == 3  # same name until renamed
+
+
+def test_scan_only_and_portable_drive(env, tmp_path):
+    import os
+    import sys
+
+    from contentrag import drive
+    from contentrag.config import load_config
+
+    cfg, conn = env
+    a = cfg.roots[0].path
+    _video(a / "Day in my life" / "wake.mp4", "360x640", 3, {})
+    st = scan(cfg, conn, log=lambda *_: None, only=a / "Day in my life")
+    assert st["new"] == 1 and st["removed"] == 0
+    assert [r[0] for r in conn.execute("SELECT relpath FROM media")] == ["Day in my life/wake.mp4"]
+    with pytest.raises(SystemExit):
+        scan(cfg, conn, log=lambda *_: None, only=tmp_path)  # not inside a footage drive
+    assert scan(cfg, conn, log=lambda *_: None)["new"] >= 3  # a full scan still finds the rest
+
+    # the drive carries code, a relative config, skills and a launcher
+    d = tmp_path / "ssd1"
+    (d / "ContentLibrary").mkdir()
+    toml = tmp_path / "portable.toml"
+    toml.write_text(f'library_dir = "{d / "ContentLibrary"}"\n[[roots]]\nname = "arch"\npath = "{a}"\n'
+                    f'[[roots]]\nname = "other"\npath = "{tmp_path / "elsewhere"}"\n')
+    res = drive.setup(load_config(toml), d, log=lambda *_: None)
+    app = d / "ContentLibrary" / "app"
+    text = (app / "contentrag.toml").read_text()
+    assert 'library_dir = ".."' in text and 'path = "../../Archive"' in text and str(tmp_path / "elsewhere") in text
+    moved = load_config(app / "contentrag.toml")
+    assert moved.library_dir == (d / "ContentLibrary").resolve() and moved.roots[0].path == a.resolve()
+    for f in ("crag", "Set up this Mac.command", "CLAUDE.md", "START HERE.md", ".claude/skills/find-clips/SKILL.md",
+              "ContentLibrary/app/contentrag/edit/render.py"):
+        assert (d / f).exists(), f
+    assert res["files"] > 20
+    env_vars = {k: v for k, v in os.environ.items() if k != "CONTENTRAG_CONFIG"}
+    r = subprocess.run(["sh", str(d / "crag"), "status"], capture_output=True, text=True,
+                       env=env_vars | {"CRAG_VENV": str(tmp_path / "nothing")})
+    assert r.returncode == 1 and "Set up this Mac" in r.stderr
+    r = subprocess.run(["sh", str(d / "crag"), "status"], capture_output=True, text=True,
+                       env=env_vars | {"CRAG_VENV": str(Path(sys.executable).parents[1])})
+    assert r.returncode == 0, r.stderr

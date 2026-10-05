@@ -298,7 +298,41 @@ After posting, run `crag videos --posted thailand-scam --views 12000 --saves 340
 Then `crag videos --by-style` (and the brain's `Videos.md`) show which styles work best on each
 page.
 
-## Moving to another Mac
+## The drive carries everything (plug in anywhere)
+
+Once, from your Mac (with the library on the footage drive):
+
+```bash
+crag drive setup          # again after every `git pull`, to update the code on the drive
+```
+
+The drive then holds the code (`ContentLibrary/app`, with a `contentrag.toml` whose paths are relative
+to the drive), the launcher `crag`, `Set up this Mac.command`, a `CLAUDE.md` and the Claude skills
+at its root, and `START HERE.md`. On any Mac:
+
+1. Plug in the drive. First time on that Mac: double-click **Set up this Mac.command**. It installs
+   ffmpeg and Python there, a few minutes, once. Nothing personal goes onto that computer.
+2. Open the Claude app → **Code** → choose the drive folder (or `cd /Volumes/T7 && claude`).
+3. Ask for a video. Claude runs `./crag ...` on the drive: search, edit, export.
+
+Finding clips and editing need no API key. Analysing new footage there needs the Gemini key in
+`~/.content-rag/keys` on that Mac, or `./crag backend claude-code` (the Claude plan).
+Model downloads (Whisper, embeddings) are kept in `ContentLibrary/models`, so they download only once.
+
+## New footage, just one folder
+
+Copy it onto the drive, then:
+
+```bash
+crag autopilot --only "/Volumes/T7/Day in my life"     # scans just this folder, analyses what's new
+```
+
+Everything analysed before stays as it is. `crag scan --only <folder>` does only the scan step.
+Keep templates, SFX packs and style reference reels inside `ContentLibrary` (e.g.
+`ContentLibrary/templates`), which is never scanned as footage. Then `crag assets import
+ContentLibrary/templates/<folder>` reads the template XML in that folder.
+
+## Moving to another Mac (without the drive setup)
 
 The footage SSDs stay as they are. You move the code (git), your settings, and optionally the
 library (everything crag has generated).

@@ -151,8 +151,10 @@ def counts(conn) -> dict:
 
 
 class Autopilot:
-    def __init__(self, cfg: Config, log=print, stop: threading.Event | None = None, hours: float = 24.0):
+    def __init__(self, cfg: Config, log=print, stop: threading.Event | None = None, hours: float = 24.0,
+                 only: str | None = None):
         self.cfg = cfg
+        self.only = only  # a folder: scan just that (everything else analysed already stays as it is)
         self.stop = stop or threading.Event()
         self.deadline = time.time() + hours * 3600
         self.state: dict = {}
@@ -258,7 +260,7 @@ class Autopilot:
             self.save(round=rounds)
             # 1. find new files (also picks up files that were still copying last time)
             self.phase("scan", conn)
-            scan(cfg, conn, log=self.log)
+            scan(cfg, conn, log=self.log, only=self.only)
             if self.stop.is_set():
                 break
             # 2. thumbnails / cuts

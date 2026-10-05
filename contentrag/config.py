@@ -104,8 +104,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
+    def place(value: str) -> Path:
+        """Paths may be relative to this file (a config kept on the drive works wherever it's mounted)."""
+        q = Path(value).expanduser()
+        return q if q.is_absolute() else (path.parent / q).resolve()
+
     roots = [
-        Root(name=r["name"], path=Path(r["path"]).expanduser(), kind=r.get("kind", "archive"),
+        Root(name=r["name"], path=place(r["path"]), kind=r.get("kind", "archive"),
              skip=[str(x).strip("/") for x in r.get("skip", [])])
         for r in raw.get("roots", [])
     ]
@@ -126,7 +131,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     if backend not in BACKENDS:
         raise SystemExit(f"[describe] backend must be one of: {', '.join(BACKENDS)}.")
     return Config(
-        library_dir=Path(raw["library_dir"]).expanduser(),
+        library_dir=place(raw["library_dir"]),
         roots=roots,
         timezone=raw.get("timezone", "Asia/Kolkata"),
         whisper_model=t.get("model", Config.whisper_model),

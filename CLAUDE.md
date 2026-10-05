@@ -33,6 +33,10 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   Remotion 4.0.532). Styles + assets in `style.py`. Transition
   recipes (plate + timed/levelled SFX) imported from the creator's Premiere template by
   `crag assets import` live in `transitions.py` / `library/assets/transitions/`. Song analysis in `music.py`.
+- Portable drive: `crag drive setup` (`drive.py`) copies the code + a drive-relative config to
+  `library_dir/app`, and `crag` launcher, `Set up this Mac.command`, CLAUDE.md, skills to the drive
+  root (config paths may be relative to the toml). `crag autopilot/scan --only <folder>` = new footage
+  in one folder (no pruning).
 - Footage roots are read-only for everything except `crag organize apply/undo` (explicit
   plan -> review -> apply; moves within a drive only, never deletes). Everything else that is
   generated goes under `library_dir`.

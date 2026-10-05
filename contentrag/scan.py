@@ -21,10 +21,11 @@ SKIP_DIRS = {".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems", "@e
              "THMBNL", "SUB", ".thumbnails", "Thumbnails"}  # camera thumbnails/proxies, phone thumbnail caches
 
 
-def iter_media(root: Path, exclude: Path | None, skip: list[str] | tuple = ()):
-    """Media files under root, minus system folders, the library itself and the root's `skip` folders."""
+def iter_media(root: Path, exclude: Path | None, skip: list[str] | tuple = (), start: Path | None = None):
+    """Media files under root (or only under `start`, a folder inside it), minus system folders, the
+    library itself and the root's `skip` folders."""
     skipped = {(root / s).resolve() for s in skip}
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(start or root):
         d = Path(dirpath)
         dirnames[:] = [
             n for n in dirnames
@@ -42,19 +43,35 @@ def iter_media(root: Path, exclude: Path | None, skip: list[str] | tuple = ()):
                 yield p, kind
 
 
-def scan(cfg: Config, conn, log=print) -> dict:
+def only_root(cfg: Config, folder: str | os.PathLike) -> tuple:
+    """(root, folder) for a folder inside one of the roots; SystemExit with advice otherwise."""
+    folder = Path(folder).expanduser().resolve()
+    if not folder.is_dir():
+        raise SystemExit(f"Folder not found: {folder}")
+    for root in cfg.roots:
+        if root.mounted and folder.is_relative_to(root.path.resolve()):
+            return root, folder
+    names = ", ".join(f"{r.name} ({r.path})" for r in cfg.roots)
+    raise SystemExit(f"{folder} is not inside a footage drive ({names}). Copy it onto the drive first.")
+
+
+def scan(cfg: Config, conn, log=print, only: str | os.PathLike | None = None) -> dict:
+    """Find new/changed files on every mounted root, or only inside the folder `only`."""
     stats = {"new": 0, "duplicate": 0, "known": 0, "replaced": 0, "still_copying": 0, "empty": 0,
              "failed": 0, "skipped_roots": []}
     library = cfg.library_dir.resolve() if cfg.library_dir.exists() else None
     now = time.time()
+    only_in, start = only_root(cfg, only) if only else (None, None)
     for root in cfg.roots:
+        if only_in is not None and root is not only_in:
+            continue
         if not root.mounted:
             stats["skipped_roots"].append(root.name)
             log(f"[scan] {root.name}: not mounted at {root.path}, skipping")
             continue
-        log(f"[scan] {root.name}: {root.path}")
+        log(f"[scan] {root.name}: {start or root.path}")
         last_report = 0
-        for path, kind in iter_media(root.path, library, root.skip):
+        for path, kind in iter_media(root.path.resolve() if start else root.path, library, root.skip, start):
             rel = path.relative_to(root.path).as_posix()
             try:
                 st = path.stat()
@@ -110,7 +127,7 @@ def scan(cfg: Config, conn, log=print) -> dict:
     from .collections import backfill_collections
 
     backfill_collections(conn, full=True)
-    stats["removed"] = prune_missing(cfg, conn, log)
+    stats["removed"] = 0 if only else prune_missing(cfg, conn, log)  # a partial scan can't tell what's gone
     stats["skipped"] = mark_skips(conn)
     geocode(conn, log)
     return stats

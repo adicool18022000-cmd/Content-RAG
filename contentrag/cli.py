@@ -52,7 +52,7 @@ def cmd_scan(args):
     from .scan import scan
 
     cfg, conn = _open(args)
-    print(json.dumps(scan(cfg, conn), indent=2))
+    print(json.dumps(scan(cfg, conn, only=getattr(args, "only", None)), indent=2))
 
 
 def cmd_prep(args):
@@ -386,8 +386,12 @@ def cmd_autopilot(args):
     from .autopilot import Autopilot, Busy
 
     cfg = load_config(args.config)
+    if args.only:
+        from .scan import only_root
+
+        only_root(cfg, args.only)  # clear message now if the folder isn't on a footage drive
     try:
-        result = Autopilot(cfg, hours=args.hours).run()
+        result = Autopilot(cfg, hours=args.hours, only=args.only).run()
     except Busy as e:
         raise SystemExit(str(e))
     except KeyboardInterrupt:
@@ -395,6 +399,12 @@ def cmd_autopilot(args):
     print(result["summary"])
     for p in result["problems"][:20]:
         print(f"  [{p['status']}] {p['file']}: {p['error']}")
+
+
+def cmd_drive(args):
+    from .drive import setup
+
+    print(json.dumps(setup(load_config(args.config), args.drive), indent=2))
 
 
 def cmd_ui(args):
@@ -437,7 +447,9 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
-    sub.add_parser("scan", help="find files, dedupe, read dates/GPS").set_defaults(fn=cmd_scan)
+    sp = sub.add_parser("scan", help="find files, dedupe, read dates/GPS")
+    sp.add_argument("--only", metavar="FOLDER", help="scan just this folder (inside a footage drive)")
+    sp.set_defaults(fn=cmd_scan)
     for name, fn, help_ in (("prep", cmd_prep, "sample frames, scene cuts, audio"),
                             ("transcribe", cmd_transcribe, "Whisper speech-to-text")):
         sp = sub.add_parser(name, help=help_)
@@ -536,7 +548,7 @@ def main(argv=None):
 
     sp = sub.add_parser("assets", help="assets folder (light leaks, SFX, LUTs, fonts) + transition library")
     sp.add_argument("action", nargs="?", choices=["show", "import", "transitions"], default="show",
-                    help="import <template.xml>: flash/leak + SFX recipes from a Premiere template")
+                    help="import <template.xml or its folder>: flash/leak + SFX recipes from a Premiere template")
     sp.add_argument("xml", nargs="?")
     sp.add_argument("--media", help="folder with the template's plates and SFX (default: next to the XML)")
     sp.set_defaults(fn=cmd_assets)
@@ -574,7 +586,14 @@ def main(argv=None):
 
     sp = sub.add_parser("autopilot", help="run everything unattended until done (overnight)")
     sp.add_argument("--hours", type=float, default=24, help="give up waiting after this many hours (default 24)")
+    sp.add_argument("--only", metavar="FOLDER",
+                    help="new footage in just this folder: scans only it, then analyses what's new")
     sp.set_defaults(fn=cmd_autopilot)
+
+    sp = sub.add_parser("drive", help="make the footage drive self-contained: plug in anywhere, open Claude on it")
+    sp.add_argument("action", choices=["setup"], help="setup: copy the code, config, skills and launcher onto it")
+    sp.add_argument("--drive", help="drive folder (default: the drive the library is on)")
+    sp.set_defaults(fn=cmd_drive)
 
     sp = sub.add_parser("ui", help="local dashboard in your browser (http://127.0.0.1:8765)")
     sp.add_argument("--port", type=int, default=8765)
