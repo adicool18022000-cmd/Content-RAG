@@ -8,6 +8,8 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
 - Index: `library_dir/index.sqlite`; vault: `library_dir/LifeVault` (its own `CLAUDE.md`).
   Vault meaning layer: `Memories/` notes (event_id → what it meant, importance) are read by
   `vault.read_memories` and shown on generated event/year notes; `_generated/Interview queue.md`.
+  Dashboard Memories tab (`memories.py`): same event ids as the vault, media + voice (local
+  mlx-whisper via `/api/transcribe`) → `save_memory` (keeps sections it doesn't manage).
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
 - AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the

@@ -315,6 +315,23 @@ def make_handler(cfg: Config, job: Job):
                     for p in data["persons"]:
                         p["sample_url"] = thumb(p["sample"])
                     return self._json(data)
+                if url.path == "/api/memories":
+                    from .memories import list_events
+
+                    conn = connect(cfg.db_path)
+                    try:
+                        return self._json(list_events(cfg, conn))
+                    finally:
+                        conn.close()
+                if url.path == "/api/memories/event":
+                    from .memories import event_detail
+
+                    conn = connect(cfg.db_path)
+                    try:
+                        ev = event_detail(cfg, conn, qs.get("id", ""), show_hidden_people=qs.get("hidden") == "1")
+                    finally:
+                        conn.close()
+                    return self._json(ev) if ev else self._json({"error": "not found"}, 404)
                 if url.path == "/api/thumb":
                     p = (library / qs.get("p", "")).resolve()
                     if library not in p.parents or not p.is_file():
@@ -415,6 +432,31 @@ def make_handler(cfg: Config, job: Job):
                 finally:
                     conn.close()
                 return self._json({"error": "nothing to do"}, 400)
+            if url.path == "/api/memories/save":
+                from .memories import save_memory
+
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                conn = connect(cfg.db_path)
+                try:
+                    return self._json(save_memory(cfg, conn, str(body.get("id") or ""), body))
+                except ValueError as e:
+                    return self._json({"error": str(e)}, 400)
+                finally:
+                    conn.close()
+            if url.path == "/api/transcribe":
+                from .memories import transcribe_audio
+
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 80 * 1024 * 1024:
+                    return self._json({"error": "recording is empty or too long"}, 400)
+                audio = self.rfile.read(length)
+                ctype = (self.headers.get("Content-Type") or "").split(";")[0]
+                suffix = {"audio/mp4": ".m4a", "audio/ogg": ".ogg", "audio/wav": ".wav"}.get(ctype, ".webm")
+                mode = parse_qs(url.query).get("mode", ["auto"])[-1]
+                try:
+                    return self._json({"text": transcribe_audio(cfg, audio, suffix, mode)})
+                except RuntimeError as e:
+                    return self._json({"error": str(e)}, 501)
             if url.path == "/api/stop":
                 from .autopilot import read_state, stop_file
 

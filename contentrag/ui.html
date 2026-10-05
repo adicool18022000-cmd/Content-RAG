@@ -183,6 +183,74 @@ summary::-webkit-details-marker { display: none; }
           box-shadow: 0 8px 30px rgba(0, 0, 0, .18); border: 1px solid var(--separator); max-width: calc(100vw - 32px); }
 .empty { text-align: center; color: var(--secondary); padding: 48px 16px; grid-column: 1 / -1; }
 
+/* ---------------------------------------------------------------- memories */
+.mem { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; align-items: start; }
+.mem-side { position: sticky; top: 76px; display: grid; gap: 10px; }
+.mem-side .toolbar { display: flex; gap: 8px; }
+.mem-side .toolbar .field { flex: 1; min-width: 0; }
+.mem-list { position: relative; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow-y: auto;
+            max-height: calc(100vh - 220px); padding: 6px 0; }
+.mem-month { font-size: 12px; font-weight: 600; color: var(--tertiary); text-transform: uppercase; letter-spacing: .04em;
+             padding: 10px 14px 4px; }
+.mem-ev { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; width: 100%; text-align: left; border: 0;
+          background: none; padding: 7px 14px; cursor: pointer; border-radius: 0; }
+.mem-ev:hover { background: var(--fill); }
+.mem-ev[aria-current="true"] { background: var(--accent-soft); }
+.mem-ev .t { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mem-ev .s { font-size: 12px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mem-ev .tick { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; border: 1.5px solid var(--tertiary); }
+.mem-ev.done .tick { background: var(--green-dot); border-color: var(--green-dot); }
+.mem-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.mem-head h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.02em; }
+.mem-head .sub { color: var(--secondary); margin-top: 4px; }
+.stage { background: #000; border-radius: var(--radius); overflow: hidden; position: relative; display: grid;
+         place-items: center; aspect-ratio: 16 / 10; max-height: 62vh; width: 100%; }
+.stage video, .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.stage .frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; width: 100%; height: 100%; }
+.stage .frames img { object-fit: cover; }
+.stage .note { position: absolute; left: 12px; bottom: 12px; color: #fff; background: rgba(0,0,0,.55); padding: 4px 10px;
+               border-radius: 980px; font-size: 12px; }
+.stage .arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%;
+                border: 0; background: rgba(0,0,0,.45); color: #fff; font-size: 20px; cursor: pointer; }
+.stage .arrow.l { left: 12px; } .stage .arrow.r { right: 12px; }
+.strip { position: relative; display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px; scroll-snap-type: x proximity; }
+.strip button { flex: none; width: 96px; height: 64px; border-radius: 10px; overflow: hidden; border: 2px solid transparent;
+                padding: 0; background: #111; cursor: pointer; position: relative; scroll-snap-align: start; }
+.strip button[aria-current="true"] { border-color: var(--accent); }
+.strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.strip .k { position: absolute; right: 4px; bottom: 3px; font-size: 10px; color: #fff; background: rgba(0,0,0,.6);
+            border-radius: 6px; padding: 0 5px; }
+.caption { display: grid; gap: 4px; }
+.caption .said { color: var(--secondary); font-style: italic; }
+.ask label { display: block; font-weight: 600; margin-bottom: 6px; }
+.ask .hint { font-weight: 400; color: var(--secondary); font-size: 13px; }
+.ask textarea { width: 100%; min-height: 120px; resize: vertical; border-radius: 12px; border: 1px solid transparent;
+                background: var(--fill); padding: 12px 14px; font: inherit; color: inherit; line-height: 1.5; }
+.ask textarea:focus, .ask input.field:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.ask .tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.mic { display: inline-flex; align-items: center; gap: 8px; }
+.mic.rec { background: var(--red-dot) !important; color: #fff !important; }
+.mic.rec::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { height: 30px; padding: 0 12px; border-radius: 980px; border: 1px solid var(--separator); background: var(--surface);
+        cursor: pointer; font-size: 13px; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.stars { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.stars button { width: 36px; height: 36px; border: 0; background: none; font-size: 26px; cursor: pointer; color: var(--fill-hover);
+                padding: 0; line-height: 1; }
+.stars button.on { color: #ffb800; }
+.mem-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mem-actions { display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap;
+               border-top: 1px solid var(--separator); padding-top: 16px; }
+@media (max-width: 860px) {
+  .mem { grid-template-columns: 1fr; }
+  .mem-side { position: static; }
+  .mem-list { max-height: 260px; }
+  .mem-grid2 { grid-template-columns: 1fr; }
+  .mem-head h1 { font-size: 24px; }
+}
+
 /* ---------------------------------------------------------------- dialog, toast */
 dialog { border: 0; padding: 0; border-radius: 20px; width: min(920px, calc(100vw - 32px)); background: var(--surface);
          color: var(--label); box-shadow: 0 24px 80px rgba(0, 0, 0, .35); }
@@ -234,6 +302,7 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
     <div class="segmented" role="tablist">
       <button role="tab" data-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-tab="search">Search</button>
+      <button role="tab" data-tab="memories">Memories</button>
       <button role="tab" data-tab="people">People</button>
       <button role="tab" data-tab="settings">Settings</button>
     </div>
@@ -318,6 +387,26 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
     </div>
   </section>
 
+  <!-- ======================================================== MEMORIES -->
+  <section data-page="memories" hidden>
+    <div class="page-head"><h1>Memories</h1>
+      <p>Go through your life in order. Look at the photos and videos, then tell the story behind them, typed or by voice.
+        It's saved in your Life Vault, and Claude uses it when it writes about you.</p></div>
+    <div class="mem">
+      <aside class="mem-side">
+        <div class="toolbar">
+          <select class="field" id="memYear" aria-label="Year"></select>
+          <select class="field" id="memShow" aria-label="Which events">
+            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option>
+          </select>
+        </div>
+        <div class="muted" id="memProgress" style="font-size:13px;padding:0 4px">Loading…</div>
+        <nav class="mem-list" id="memList" aria-label="Events"></nav>
+      </aside>
+      <div class="stack" id="memMain"><div class="empty">Loading your timeline…</div></div>
+    </div>
+  </section>
+
   <!-- ======================================================== PEOPLE -->
   <section data-page="people" hidden>
     <div class="page-head"><h1>People</h1>
@@ -386,10 +475,210 @@ function showTab(name) {
   document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
   if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
   if (name === "people") loadPeople();
+  if (name === "memories") loadMemories();
   window.scrollTo({top: 0});
 }
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+
+/* ------------------------------------------------------------- memories */
+const MEM = {events: [], idx: -1, ev: null, item: 0, feelings: [], dirty: false, hidden: false, rec: null};
+const mstore = {get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }};
+const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, {weekday: "long", day: "numeric", month: "long", year: "numeric"});
+const thumbUrl = (p) => p ? `/api/thumb?p=${encodeURIComponent(p)}` : "";
+
+async function loadMemories() {
+  if (MEM.events.length) return renderMemList();
+  const j = await (await fetch("/api/memories")).json();
+  MEM.events = j.events || []; MEM.feelings = j.feelings || [];
+  if (!MEM.events.length) { $("memMain").innerHTML = `<div class="empty">No analysed footage with dates yet.</div>`; return; }
+  const years = [...new Set(MEM.events.map(e => e.date.slice(0, 4)))];
+  $("memYear").innerHTML = years.map(y => `<option>${y}</option>`).join("");
+  const last = mstore.get("mem.last");
+  let i = MEM.events.findIndex(e => e.id === last);
+  if (i < 0) i = Math.max(0, MEM.events.findIndex(e => !e.done));
+  openEvent(i);
+}
+function renderMemList() {
+  const y = $("memYear").value, show = $("memShow").value;
+  const done = MEM.events.filter(e => e.done).length;
+  $("memProgress").textContent = `${done} of ${MEM.events.length} events told`;
+  let month = "", html = "";
+  MEM.events.forEach((e, i) => {
+    if (e.date.slice(0, 4) !== y) return;
+    if ((show === "todo" && e.done) || (show === "done" && !e.done)) return;
+    const m = e.date.slice(0, 7);
+    if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
+    html += `<button class="mem-ev${e.done ? " done" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
+      <span class="tick" title="${e.done ? "Told" : "Not told yet"}"></span>
+      <span style="min-width:0"><div class="t">${esc(e.date.slice(8))} · ${esc(e.place || e.title)}</div>
+      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}</div></span></button>`;
+  });
+  $("memList").innerHTML = html || `<div class="empty" style="padding:24px">Nothing here.</div>`;
+  const list = $("memList"), cur = list.querySelector('[aria-current="true"]');
+  if (cur && (cur.offsetTop < list.scrollTop || cur.offsetTop + cur.offsetHeight > list.scrollTop + list.clientHeight))
+    list.scrollTop = cur.offsetTop - list.clientHeight / 3;  // only the list scrolls, never the page
+}
+$("memYear").onchange = renderMemList; $("memShow").onchange = renderMemList;
+$("memList").onclick = (e) => { const b = e.target.closest(".mem-ev"); if (b) openEvent(+b.dataset.i); };
+
+async function openEvent(i) {
+  if (i < 0 || i >= MEM.events.length) return;
+  saveDraft();
+  MEM.idx = i; MEM.item = 0; MEM.dirty = false;
+  const e = MEM.events[i];
+  mstore.set("mem.last", e.id);
+  $("memYear").value = e.date.slice(0, 4); renderMemList();
+  $("memMain").innerHTML = `<div class="empty">Loading…</div>`;
+  const r = await fetch(`/api/memories/event?id=${encodeURIComponent(e.id)}${MEM.hidden ? "&hidden=1" : ""}`);
+  if (!r.ok) { $("memMain").innerHTML = `<div class="empty">Couldn't load this event.</div>`; return; }
+  MEM.ev = await r.json();
+  renderEvent();
+}
+function renderEvent() {
+  const ev = MEM.ev, e = MEM.events[MEM.idx], m = ev.memory || {};
+  let draft = null; try { draft = JSON.parse(mstore.get("mem.draft." + ev.id) || "null"); } catch (x) {}
+  const v = Object.assign({meaning: "", story: "", angle: "", feeling: "", importance: 0, people: [], era: ""}, m, draft || {});
+  const timeRange = ev.time + (ev.end.slice(0, 10) === ev.date ? "–" + ev.end.slice(11) : " → " + ev.end);
+  $("memMain").innerHTML = `
+    <div class="mem-head"><div style="min-width:0">
+        <div class="muted" style="font-size:13px">Event ${MEM.idx + 1} of ${MEM.events.length}${m.note ? ' · <span class="badge green">Told</span>' : ""}${draft ? ' · <span class="badge blue">Unsaved draft</span>' : ""}</div>
+        <h1>${esc(fmtDate(ev.date))}</h1>
+        <div class="sub">${esc(timeRange)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length} photo${ev.items.length === 1 ? "" : "s"}/video${ev.items.length === 1 ? "" : "s"}</div></div>
+      <div class="row-actions"><button class="btn" type="button" id="mPrev">‹ Earlier</button><button class="btn" type="button" id="mNext">Later ›</button></div></div>
+    ${ev.items.length ? `<div class="stage" id="mStage"></div><div class="strip" id="mStrip" aria-label="Photos and videos in this event">${ev.items.map((it, k) =>
+      `<button type="button" data-k="${k}" aria-current="${k === 0}" title="${esc(it.time + " " + (it.title || ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
+      <div class="caption" id="mCaption"></div>` : `<div class="notice">All items of this event include people you've hidden.</div>`}
+    ${ev.held_back ? `<div class="muted" style="font-size:13px">${ev.held_back} item${ev.held_back === 1 ? "" : "s"} with people you've hidden ${MEM.hidden ? "are shown" : "are left out"}. <a href="#" id="mHidden">${MEM.hidden ? "Hide them" : "Show them anyway"}</a></div>` : ""}
+    <div class="card ask stack" style="gap:18px">
+      <div><label for="mStory">What was happening? <span class="hint">Where were you, who was there, why, what happened before and after.</span></label>
+        <textarea id="mStory" placeholder="Tell it like you'd tell a friend…">${esc(v.story)}</textarea>
+        <div class="tools"><button class="btn small mic" type="button" data-for="mStory">🎙 Speak</button>
+          <select class="field" id="mLang" style="height:30px;font-size:13px;max-width:220px" aria-label="Voice language">
+            <option value="auto">Voice: automatic</option><option value="hi">Hindi (देवनागरी)</option><option value="en">English</option><option value="translate">Hindi → English text</option></select>
+          <span class="muted" style="font-size:12px">Transcribed privately on this Mac. macOS Dictation (press Fn twice) works too.</span></div></div>
+      <div><label for="mMeaning">What did it mean to you? <span class="hint">One or two lines. How you felt, what it changed.</span></label>
+        <textarea id="mMeaning" style="min-height:70px" placeholder="e.g. First time I felt free in a new city">${esc(v.meaning)}</textarea>
+        <div class="tools"><button class="btn small mic" type="button" data-for="mMeaning">🎙 Speak</button></div></div>
+      <div><label>How did it feel?</label><div class="chips" id="mFeel">${MEM.feelings.map(f =>
+        `<button type="button" class="chip" aria-pressed="${(v.feeling || "").split(",").map(x => x.trim()).includes(f)}">${esc(f)}</button>`).join("")}</div></div>
+      <div><label>How much does it matter to you now?</label><div class="stars" id="mStars">${[1, 2, 3, 4, 5].map(n =>
+        `<button type="button" data-n="${n}" class="${n <= v.importance ? "on" : ""}" aria-label="${n} of 5">★</button>`).join("")}
+        <span class="muted" id="mStarTxt" style="font-size:13px;margin-left:6px"></span></div></div>
+      <div class="mem-grid2">
+        <div><label for="mPeople">Who was there?</label><input class="field" id="mPeople" style="width:100%" value="${esc((v.people || []).join(", "))}" placeholder="Names, separated by commas">
+          ${ev.people_seen.length ? `<div class="chips" style="margin-top:8px">${ev.people_seen.map(p => `<button type="button" class="chip" data-person="${esc(p)}">+ ${esc(p)}</button>`).join("")}</div>` : ""}</div>
+        <div><label for="mEra">Chapter of your life</label><input class="field" id="mEra" style="width:100%" list="mEras" value="${esc(v.era)}" placeholder="e.g. College, First job in Bangalore">
+          <datalist id="mEras">${ev.eras.map(x => `<option value="${esc(x)}">`).join("")}</datalist></div>
+      </div>
+      <div><label for="mAngle">Could this be a reel? <span class="hint">Optional</span></label>
+        <input class="field" id="mAngle" style="width:100%" value="${esc(v.angle)}" placeholder="e.g. 'The night I almost quit' — story to camera with this footage"></div>
+      <div class="mem-actions"><span class="muted" id="mSaved" style="font-size:13px">${m.note ? "Saved in " + esc(m.note) : "Not saved yet"}</span>
+        <div class="row-actions"><span class="muted" style="font-size:12px">⌘↵ saves</span><button class="btn plain" type="button" id="mSkip">Skip</button>
+          <button class="btn primary" type="button" id="mSave">Save &amp; next ›</button></div></div>
+    </div>`;
+  if (ev.items.length) showItem(0);
+  setStarTxt(v.importance);
+  $("mPrev").onclick = () => openEvent(MEM.idx - 1);
+  $("mNext").onclick = () => openEvent(MEM.idx + 1);
+  $("mSkip").onclick = () => { mstore.set("mem.draft." + ev.id, null); MEM.dirty = false; openEvent(MEM.idx + 1); };
+  $("mSave").onclick = saveMemory;
+  if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !MEM.hidden; openEvent(MEM.idx); };
+  if ($("mStrip")) $("mStrip").onclick = (x) => { const b = x.target.closest("button"); if (b) showItem(+b.dataset.k); };
+  $("mFeel").onclick = (x) => { const c = x.target.closest(".chip"); if (c) { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); MEM.dirty = true; } };
+  $("mStars").onclick = (x) => { const b = x.target.closest("button"); if (!b) return; const n = +b.dataset.n;
+    const cur = $("mStars").querySelectorAll("button.on").length, val = cur === n ? 0 : n;
+    $("mStars").querySelectorAll("button").forEach(s => s.classList.toggle("on", +s.dataset.n <= val)); setStarTxt(val); MEM.dirty = true; };
+  $("memMain").querySelectorAll("[data-person]").forEach(b => b.onclick = () => {
+    const cur = $("mPeople").value.split(",").map(x => x.trim()).filter(Boolean);
+    if (!cur.includes(b.dataset.person)) cur.push(b.dataset.person);
+    $("mPeople").value = cur.join(", "); MEM.dirty = true; });
+  $("memMain").querySelectorAll("textarea, input").forEach(el => el.addEventListener("input", () => { MEM.dirty = true; }));
+  $("memMain").querySelectorAll(".mic").forEach(b => b.onclick = () => toggleMic(b));
+  try { $("mLang").value = mstore.get("mem.lang") || "auto"; } catch (x) {}
+  $("mLang").onchange = () => mstore.set("mem.lang", $("mLang").value);
+}
+const STARTXT = ["", "Just a day", "Nice memory", "Meaningful", "Big moment", "Changed my life"];
+function setStarTxt(n) { if ($("mStarTxt")) $("mStarTxt").textContent = STARTXT[n] || ""; }
+function fmtDur(s) { s = Math.round(s || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+function showItem(k) {
+  const items = MEM.ev.items; if (!items.length) return;
+  MEM.item = (k + items.length) % items.length;
+  const it = items[MEM.item], st = $("mStage");
+  $("mStrip").querySelectorAll("button").forEach(b => b.setAttribute("aria-current", +b.dataset.k === MEM.item));
+  const strip = $("mStrip"), b = strip.querySelector(`[data-k="${MEM.item}"]`);
+  if (b.offsetLeft < strip.scrollLeft || b.offsetLeft + b.offsetWidth > strip.scrollLeft + strip.clientWidth)
+    strip.scrollLeft = b.offsetLeft - 8;
+  const arrows = items.length > 1 ? `<button class="arrow l" type="button" aria-label="Previous" onclick="showItem(MEM.item-1)">‹</button><button class="arrow r" type="button" aria-label="Next" onclick="showItem(MEM.item+1)">›</button>` : "";
+  if (it.kind === "video") {
+    st.innerHTML = `<video controls playsinline preload="metadata" poster="${thumbUrl(it.thumb)}" src="/api/media/${it.id}"></video>${arrows}`;
+    st.querySelector("video").onerror = () => { st.innerHTML = `<div class="frames">${it.frames.map(f => `<img src="${thumbUrl(f)}" alt="">`).join("")}</div>
+      <span class="note">This video can't play here (drive unplugged or old format), so these are frames from it</span>${arrows}`; };
+  } else {
+    st.innerHTML = `<img src="${thumbUrl(it.thumb)}" alt="">${arrows}`;
+  }
+  $("mCaption").innerHTML = `<div><b>${esc(it.time)}</b> · ${esc(it.title || (it.kind === "video" ? "Video" : "Photo"))}</div>
+    ${it.summary ? `<div class="muted">${esc(it.summary)}</div>` : ""}
+    ${it.said.length ? `<div class="said">Said: ${it.said.map(x => "“" + esc(x) + "”").join(" ")}</div>` : ""}`;
+}
+function formData() {
+  return {id: MEM.ev.id, story: $("mStory").value, meaning: $("mMeaning").value, angle: $("mAngle").value,
+    era: $("mEra").value.trim(), people: $("mPeople").value.split(",").map(x => x.trim()).filter(Boolean),
+    feeling: [...$("mFeel").querySelectorAll('[aria-pressed="true"]')].map(c => c.textContent).join(", "),
+    importance: $("mStars").querySelectorAll("button.on").length};
+}
+function saveDraft() {
+  if (!MEM.ev || !MEM.dirty || !$("mStory")) return;
+  mstore.set("mem.draft." + MEM.ev.id, JSON.stringify(formData()));
+}
+async function saveMemory() {
+  const d = formData();
+  if (!d.story.trim() && !d.meaning.trim()) { toast("Tell a bit of the story first, or press Skip"); return; }
+  $("mSave").disabled = true;
+  const j = await (await post("/api/memories/save", d)).json();
+  $("mSave").disabled = false;
+  if (!j.ok) { toast(j.error || "Couldn't save"); return; }
+  mstore.set("mem.draft." + MEM.ev.id, null); MEM.dirty = false;
+  const e = MEM.events[MEM.idx]; e.done = true; e.importance = d.importance;
+  toast("Saved to your Life Vault");
+  openEvent(MEM.idx + 1 < MEM.events.length ? MEM.idx + 1 : MEM.idx);  // the last one: stay and show it saved
+}
+async function toggleMic(btn) {
+  if (MEM.rec) { MEM.rec.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) { toast("This browser can't record. Use macOS Dictation (Fn twice)."); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+  catch (e) { toast("Microphone not allowed. Allow it for this page, or use macOS Dictation (Fn twice)."); return; }
+  const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+  const rec = new MediaRecorder(stream, type ? {mimeType: type} : {}), chunks = [], t0 = Date.now();
+  MEM.rec = rec; btn.classList.add("rec");
+  const tick = setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); btn.textContent = ` Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  btn.textContent = " Stop 0:00";
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = async () => {
+    clearInterval(tick); stream.getTracks().forEach(t => t.stop()); MEM.rec = null;
+    btn.classList.remove("rec"); btn.textContent = "Transcribing…"; btn.disabled = true;
+    const blob = new Blob(chunks, {type: (rec.mimeType || type || "audio/webm").split(";")[0]});
+    try {
+      const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "auto")}`,
+        {method: "POST", headers: {"Content-Type": blob.type, "X-Crag": "1"}, body: blob});
+      const j = await r.json();
+      if (j.text) { const ta = $(btn.dataset.for); ta.value = (ta.value.trim() ? ta.value.trim() + "\n\n" : "") + j.text; MEM.dirty = true; saveDraft(); }
+      else toast(j.error || "Didn't catch anything, try again");
+    } catch (e) { toast("Transcription failed: " + e); }
+    btn.disabled = false; btn.textContent = "🎙 Speak";
+  };
+  rec.start();
+}
+document.addEventListener("keydown", (e) => {
+  if ($("memMain") && document.querySelector('[data-page="memories"]').hidden) return;
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && $("mSave")) { e.preventDefault(); saveMemory(); return; }
+  if (e.target.matches("textarea, input, select") || !MEM.ev) return;
+  if (e.key === "ArrowRight") showItem(MEM.item + 1);
+  if (e.key === "ArrowLeft") showItem(MEM.item - 1);
+});
+window.addEventListener("beforeunload", saveDraft);
 
 /* ------------------------------------------------------------- status */
 const PHASE = {scan: "Finding new files", prep: "Preparing thumbnails", faces: "Finding faces", transcribe: "Transcribing speech",

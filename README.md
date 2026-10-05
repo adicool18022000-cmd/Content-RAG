@@ -398,6 +398,11 @@ How the vault learns what things meant (the "brain"):
   - `People/`, `Places/`.
   - `Stories/`: content-ready memories.
   - `Me.md`: who you are now.
+- **Memories tab** (`crag ui` → Memories): your events in date and time order. For each one you see
+  the photos and play the videos, then tell the story: typed, or with 🎙 Speak, which is transcribed
+  by Whisper on your Mac (pick Hindi, English, or Hindi → English text). macOS Dictation (Fn twice)
+  works in the boxes too. Feeling, importance stars, people and life chapter are one click each.
+  Save & next (⌘↵) writes the memory into the vault. Drafts are kept if you leave mid-way.
 - **Interviews**: say "interview me" (or name a period) to Claude. It shows you what the footage
   shows, asks a few short questions per event, saves the Q&A in `Interviews/`, and writes the
   memories. `_generated/Interview queue.md` lists the biggest events that have no memory yet.

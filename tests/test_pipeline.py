@@ -1298,3 +1298,56 @@ def test_scan_only_and_portable_drive(env, tmp_path):
     r = subprocess.run(["sh", str(d / "crag"), "status"], capture_output=True, text=True,
                        env=env_vars | {"CRAG_VENV": str(Path(sys.executable).parents[1])})
     assert r.returncode == 0, r.stderr
+
+
+def test_memory_lane(env, monkeypatch):
+    from contentrag import memories
+    from contentrag.ui import Job, make_handler  # noqa: F401  (routes import cleanly)
+
+    cfg, conn = _analysed(env, monkeypatch)
+    lst = memories.list_events(cfg, conn)
+    evs = lst["events"]
+    assert evs and [e["date"] for e in evs] == sorted(e["date"] for e in evs) and lst["done"] == 0
+    goa = next(e for e in evs if e["date"] == "2023-08-12")
+    d = memories.event_detail(cfg, conn, goa["id"])
+    assert d["items"] and d["items"][0]["thumb"] and d["memory"] is None and d["items"][0]["frames"]
+    res = memories.save_memory(cfg, conn, goa["id"], {
+        "story": "Rode to the beach with Rahul.", "meaning": "First trip I planned myself.",
+        "feeling": "free, proud", "importance": 5, "people": ["Rahul"], "era": "College"})
+    note = cfg.vault_dir / res["note"]
+    assert note.exists() and "event_id: " + goa["id"] in note.read_text()
+    # extra sections Claude adds later survive an edit from the dashboard
+    note.write_text(note.read_text() + "\n## Open questions\nWho filmed it?\n")
+    memories.save_memory(cfg, conn, goa["id"], {"story": "Rode to the beach with Rahul and Aman.",
+                                                "meaning": "First trip I planned myself.", "importance": 4})
+    again = memories.event_detail(cfg, conn, goa["id"])["memory"]
+    assert again["story"].endswith("Aman.") and again["importance"] == 4 and "Who filmed it?" in note.read_text()
+    assert memories.list_events(cfg, conn)["done"] == 1
+    build_vault(cfg, conn, log=lambda *_: None)
+    ev_note = next(e for e in (cfg.vault_dir / "_generated" / "Events").rglob("*.md")
+                   if goa["id"] in e.read_text())
+    assert "First trip I planned myself." in ev_note.read_text()
+    with pytest.raises(ValueError):
+        memories.save_memory(cfg, conn, "nope", {})
+
+
+def test_voice_transcription(env, monkeypatch, tmp_path):
+    import sys
+
+    from contentrag import memories
+
+    cfg, _ = env
+    seen = {}
+
+    def fake_transcribe(path, **kw):
+        seen.update(kw, path=path)
+        return {"segments": [{"text": " Goa wali trip ", "no_speech_prob": 0.01}]}
+
+    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=fake_transcribe))
+    rec = tmp_path / "rec.webm"  # what Chrome's MediaRecorder sends
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:d=1", "-c:a", "libopus", str(rec)],
+                   check=True)
+    assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "translate") == "Goa wali trip"
+    assert seen["task"] == "translate" and seen["language"] is None and seen["path"].endswith(".wav")
+    with pytest.raises(RuntimeError):
+        memories.transcribe_audio(cfg, b"not audio", ".webm")
