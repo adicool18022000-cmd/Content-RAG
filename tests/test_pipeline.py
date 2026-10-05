@@ -167,6 +167,23 @@ def test_pipeline(env, tmp_path):
     build_vault(cfg, conn, log=lambda *_: None)
     assert (vault / "Me.md").read_text() == "mine"  # human notes survive rebuilds
 
+    # a memory (what an event meant) is linked to its event by event_id and shown in generated notes
+    import re as _re
+
+    ev_note = next(e for e in (vault / "_generated" / "Events").rglob("*.md") if "Night bike ride" in e.read_text())
+    eid = _re.search(r"^event_id: (\S+)", ev_note.read_text(), _re.M).group(1)
+    assert "No memory yet" in ev_note.read_text() and "Interview queue" in (vault / "_generated" / "Index.md").read_text()
+    assert (vault / "Memories" / "_Memory template.md").exists()
+    (vault / "Memories" / "Night ride.md").write_text(
+        f"---\ntype: memory\nevent_id: {eid}   # comment\nera: College\nimportance: 4\n---\n# Night ride\n\n"
+        "## What it meant\nFirst time I felt free in a new city.\n\n## What happened\nRode with friends.\n")
+    build_vault(cfg, conn, log=lambda *_: None)
+    ev_text = next(e for e in (vault / "_generated" / "Events").rglob("*.md") if "Night bike ride" in e.read_text()).read_text()
+    assert "First time I felt free" in ev_text and "importance: 4" in ev_text and "[[Memories/Night ride]]" in ev_text
+    years = "\n".join(y.read_text() for y in (vault / "_generated" / "Years").glob("*.md"))
+    assert "★★★★" in years and "First time I felt free" in years
+    assert ev_note.stem not in (vault / "_generated" / "Interview queue.md").read_text()
+
 
 def test_helpers():
     assert parse_meta_datetime("2023-08-12T19:04:33+0530", "Asia/Kolkata").isoformat() == "2023-08-12T19:04:33"

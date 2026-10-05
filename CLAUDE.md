@@ -6,6 +6,8 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
 - Package: `contentrag/` (CLI `crag`, see README for the pipeline order).
 - Config: `contentrag.toml` (git-ignored; template `contentrag.example.toml`).
 - Index: `library_dir/index.sqlite`; vault: `library_dir/LifeVault` (its own `CLAUDE.md`).
+  Vault meaning layer: `Memories/` notes (event_id → what it meant, importance) are read by
+  `vault.read_memories` and shown on generated event/year notes; `_generated/Interview queue.md`.
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
 - AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the

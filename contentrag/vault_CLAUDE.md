@@ -10,7 +10,10 @@ life, and to find footage.
 
 1. `_generated/Index.md`: the map: totals, collections, years, places, themes, how to pull clips.
 2. `Me.md`: who the creator is now, content pillars, pages.
-3. `Eras/` + `Stories/`: the meaning behind the footage (written with the creator).
+3. `Eras/` + `Memories/` + `Stories/`: the meaning behind the footage (written with the creator).
+   A Memory is one event in the creator's words: what it meant, feeling, importance 1–5. It also
+   shows on the event note and its Year page. `_generated/Interview queue.md` lists big events
+   that have no memory yet.
 4. `_generated/Collections/<folder>.md`: per trip/period (the creator's own folder names): story
    seeds, best hooks, cinematic, spectacle, told-to-camera, funny, emotional, establishing,
    transitions, reel recipes, what's already used.
@@ -39,6 +42,7 @@ Every moment appears as one line:
 | `_generated/Broll/` | generated | One note per purpose-shot brand clip. |
 | `Me.md` | Claude + creator | Who they are now, what they build, content pillars. Read first. |
 | `Eras/` | Claude + creator | Chapters of life (e.g. College Y1, Moving to Bangalore). The story layer. |
+| `Memories/` | Claude + creator | One note per event that mattered: `event_id` (from the event note's properties), `era`, `people`, `feeling`, `importance` (1–5), `## What it meant` (their words), what happened, content angle. Template: `Memories/_Memory template.md`. |
 | `People/`, `Places/` | Claude + creator | Recurring people and places, linked from eras and stories. |
 | `Stories/` | Claude + creator | Content-ready stories: what happened, why it matters, footage, hooks. |
 | `Interviews/` | Claude | Raw Q&A from interview sessions, dated. Source of truth for facts not visible in footage. |
@@ -76,9 +80,16 @@ Every moment appears as one line:
 
 - **Ingest**: after new footage is indexed and `crag vault` has run, read new events in
   `_generated/Timeline.md`, attach them to eras (create an era if needed), update People/Places.
-- **Interview**: pick an era or event with open questions, ask the creator 5–10 short
-  questions, save the Q&A to `Interviews/YYYY-MM-DD <topic>.md`, then update the notes.
+- **Interview**: pick an era, or events from `_generated/Interview queue.md`. Show the creator
+  what the footage shows (date, place, who's in it, a few moments), then ask 3–5 short questions
+  per event: what was happening, who was there, how it felt, what it changed, how much it matters
+  now (1–5). Save the raw Q&A to `Interviews/YYYY-MM-DD <topic>.md`, write a `Memories/` note per
+  event (their words under `## What it meant`), then update Eras/People/Places/Stories and `Me.md`.
+  Then run `crag vault` so event and year notes show the memories.
 - **Story mining**: propose Stories from eras with a clear turning point and good footage
   (B-roll ≥ 4).
-- **Lint**: look for eras without events, events without an era, people without consent
-  status, stories without footage.
+- **Lint**: look for eras without events, events without an era, memories without an era,
+  people without consent status, stories without footage.
+- **Using it**: before proposing a reel, read the Memories of the events it uses. Importance ≥ 4
+  and a strong feeling make the best stories. Never put words in the creator's mouth that aren't
+  in a Memory or Interview.

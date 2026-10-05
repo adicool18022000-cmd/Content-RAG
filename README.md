@@ -386,6 +386,24 @@ Open `library_dir/LifeVault` as a vault and enable the **Bases** core plugin.
 Everything under `_generated/` is rebuilt by `crag vault`. Everything else belongs to you
 and Claude and is never overwritten.
 
+How the vault learns what things meant (the "brain"):
+
+- **Footage layer** (generated): events (clips close in time and place), years, places, themes,
+  collections. This is what happened.
+- **Meaning layer** (you + Claude, never overwritten):
+  - `Memories/`: one note per event that mattered. What it meant in your words, who was there,
+    the feeling, and importance 1–5. It is linked to the event by `event_id` and shown on the event
+    note and its year page.
+  - `Eras/`: chapters of your life, built from memories.
+  - `People/`, `Places/`.
+  - `Stories/`: content-ready memories.
+  - `Me.md`: who you are now.
+- **Interviews**: say "interview me" (or name a period) to Claude. It shows you what the footage
+  shows, asks a few short questions per event, saves the Q&A in `Interviews/`, and writes the
+  memories. `_generated/Interview queue.md` lists the biggest events that have no memory yet.
+- Every reel idea and edit reads the memories first, so captions and scripts stay true to what
+  you actually said.
+
 ## Not built yet
 
 - Gemini Batch API (another 50% off, but results arrive hours later).

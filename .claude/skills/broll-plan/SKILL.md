@@ -7,7 +7,8 @@ description: Make a reel from the creator's own footage - a talking-head video w
 
 Everything runs through `crag` in this repo (`contentrag.toml` points at the library). The
 library's Obsidian vault (`library_dir/LifeVault`) explains the life context: read its `CLAUDE.md`,
-`_generated/Index.md`, `Me.md`, and the relevant `Eras/`, `Stories/`, `_generated/Collections/`.
+`_generated/Index.md`, `Me.md`, and the relevant `Eras/`, `Memories/` (what an event meant, in the
+creator's words), `Stories/`, `_generated/Collections/`.
 
 ## Pick the style first
 `crag style list` - one or more styles per Instagram page (captions, grade, light leaks, SFX,

@@ -116,11 +116,12 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
 
     archive = [m for m in media if m["root_kind"] == "archive"]
     events = cluster_events(archive)
+    memories = read_memories(vault)
     used: set[str] = set()
     event_of: dict[str, str] = {}  # media id -> event note name
     summaries = []
     for ev in events:
-        info = _write_event(cfg, conn, vault, gen / "Events", ev, moments_by_media, used)
+        info = _write_event(cfg, conn, vault, gen / "Events", ev, moments_by_media, used, memories)
         summaries.append(info)
         for m in ev:
             event_of[m["id"]] = info["name"]
@@ -137,10 +138,11 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
     _write_people(cfg, conn, vault, gen)
     _write_videos(conn, gen)
     _write_timeline(gen, summaries)
+    _write_interview_queue(gen, summaries)
     _write_index(gen, media, summaries, years, places, themes, len(broll), collections)
     _write_base(vault)
-    log(f"[vault] {len(events)} events, {len(collections)} collections, {len(broll)} B-roll notes, "
-        f"{len(themes)} themes -> {vault}")
+    log(f"[vault] {len(events)} events ({sum(1 for e in summaries if e['memory'])} with a memory), "
+        f"{len(collections)} collections, {len(broll)} B-roll notes, {len(themes)} themes -> {vault}")
     return {"events": len(events), "collections": len(collections), "broll": len(broll), "themes": len(themes),
             "vault": str(vault)}
 
@@ -161,7 +163,7 @@ def _moment_line(mo, m, link: str | None = None) -> str:
             f"{mo['description']}{speech}{where}")
 
 
-def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str]) -> dict:
+def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str], memories: dict | None = None) -> dict:
     first, last = ev[0], ev[-1]
     places = Counter(m["place"] for m in ev if m["place"])
     place = places.most_common(1)[0][0] if places else ""
@@ -178,6 +180,8 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str])
     video_min = sum((m["duration"] or 0) for m in ev if m["kind"] == "video") / 60
     best = max(ev, key=lambda m: max((mo["broll_score"] or 0 for mo in moments_by_media.get(m["id"], [])), default=0))
     cover = _thumb(cfg, conn, vault, best["id"])
+    # the event's id is its first clip; any of its clips matches (new footage may join the event later)
+    mem = next((memories[m["id"]] for m in ev if m["id"] in (memories or {})), None)
 
     lines = [
         "---",
@@ -192,15 +196,25 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str])
         f"video_minutes: {video_min:.1f}",
         f"tags: {_yaml_list([t for t, _ in tags.most_common(12)])}",
         f"cover: {_q(f'[[{cover}]]') if cover else _q('')}",
-        "era: ",
+        f"event_id: {first['id']}",
+        f"memory: {_q('[[' + mem['name'] + ']]') if mem else _q('')}",
+        f"importance: {mem['importance'] if mem else ''}",
+        f"era: {_q(mem['era']) if mem and mem['era'] else ''}",
         "---",
         f"# {first['taken_at'][:10]} · {place or 'Unknown place'} · {headline}",
         "",
         f"*{len(ev)} items, {first['taken_at'][11:16]}–{last['taken_at'][11:16]}"
         + (f" (until {last['taken_at'][:10]})" if last["taken_at"][:10] != first["taken_at"][:10] else "")
-        + ". Generated from footage; add the story behind it in an Era or Story note.*",
+        + ". Generated from footage.*",
         "",
     ]
+    if mem:
+        lines += ["> [!quote] What it meant" + (f" · {'★' * mem['importance']}" if mem["importance"] else ""),
+                  *[f"> {x}" for x in (mem["meaning"] or "(not written yet)").splitlines()],
+                  f"> [[{mem['name']}|Full memory]]", ""]
+    else:
+        lines += [f"*No memory yet. To add one, ask Claude: \"interview me about this event\" (event id `{first['id']}`).*",
+                  ""]
     for m in ev:
         thumb = _thumb(cfg, conn, vault, m["id"])
         meta = f"{m['kind']}, {m['orientation'] or '?'}" + (f", {fmt_ts(m['duration'])}" if m["kind"] == "video" else "")
@@ -218,7 +232,10 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str])
                           key=lambda mo: -(mo["broll_score"] or 0))[:3]
     return {"name": name, "date": first["taken_at"][:10], "place": place, "city": _city(place),
             "headline": headline, "items": len(ev), "video_min": video_min,
-            "tags": [t for t, _ in tags.most_common(6)], "best": [mo["id"] for mo in best_moments]}
+            "tags": [t for t, _ in tags.most_common(6)], "best": [mo["id"] for mo in best_moments],
+            "memory": mem["name"] if mem else None, "importance": mem["importance"] if mem else 0,
+            "meaning": (mem["meaning"] or "").splitlines()[0] if mem and mem["meaning"] else "",
+            "best_broll": max((mo["broll_score"] or 0 for mo in best_moments), default=0)}
 
 
 def _write_broll(cfg, conn, vault, folder, m, moments) -> str:
@@ -253,6 +270,51 @@ def _write_broll(cfg, conn, vault, folder, m, moments) -> str:
     return name
 
 
+def _frontmatter(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+    out = {}
+    for line in text.split("\n---", 1)[0].splitlines()[1:]:
+        if ":" in line and not line.startswith((" ", "-")):
+            k, v = line.split(":", 1)
+            out[k.strip()] = v.split("#", 1)[0].strip().strip('"').strip("'")
+    return out
+
+
+def read_memories(vault: Path) -> dict[str, dict]:
+    """Memories/*.md written with the creator, by event_id: {name, importance, era, meaning}.
+    `meaning` is the text under '## What it meant' (the first paragraph)."""
+    out: dict[str, dict] = {}
+    for p in sorted((vault / "Memories").rglob("*.md")):
+        if p.name.startswith("_"):
+            continue
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        fm = _frontmatter(text)
+        if not fm.get("event_id"):
+            continue
+        m = re.search(r"^## What it meant[^\n]*\n+(.+?)(?:\n\s*\n|\n## |\Z)", text, re.M | re.S)
+        try:
+            importance = max(0, min(5, int(fm.get("importance") or 0)))
+        except ValueError:
+            importance = 0
+        out[fm["event_id"]] = {"name": p.relative_to(vault).with_suffix("").as_posix(), "importance": importance,
+                               "era": fm.get("era", ""), "meaning": m.group(1).strip() if m else ""}
+    return out
+
+
+def _write_interview_queue(gen: Path, summaries: list[dict], n: int = 40) -> None:
+    """Events that probably mattered (lots of footage, good shots) but have no memory yet."""
+    todo = sorted((e for e in summaries if not e["memory"]),
+                  key=lambda e: -(e["items"] + 2 * e["video_min"] + 5 * e["best_broll"]))[:n]
+    done = sum(1 for e in summaries if e["memory"])
+    lines = ["# Interview queue", "",
+             f"*{done} of {len(summaries)} events have a memory. These have the most footage but no story "
+             "yet. Say \"interview me\" to Claude to work through them. Generated.*", ""]
+    lines += [f"- [[{e['name']}]] · {e['items']} items, {e['video_min']:.0f} min · {', '.join(e['tags'][:4])}"
+              for e in todo]
+    (gen / "Interview queue.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _write_timeline(gen: Path, summaries: list[dict]) -> None:
     lines = ["# Timeline", "", "*Every event in the archive, newest year first. Generated.*", ""]
     by_year: dict[str, list[dict]] = {}
@@ -281,8 +343,9 @@ def _write_years(gen: Path, summaries: list[dict]) -> list[str]:
                 month = e["date"][:7]
                 lines += ["", f"## {datetime.strptime(month, '%Y-%m'):%B %Y}"]
             best = " ".join(f"`m{i}`" for i in e["best"])
-            lines.append(f"- [[{e['name']}]] · {e['items']} items · {', '.join(e['tags'][:4])}"
-                         + (f" · best: {best}" if best else ""))
+            lines.append(f"- {'★' * e['importance'] + ' ' if e['importance'] else ''}[[{e['name']}]] · "
+                         f"{e['items']} items · {', '.join(e['tags'][:4])}" + (f" · best: {best}" if best else "")
+                         + (f"\n  - *{e['meaning']}* ([[{e['memory']}|memory]])" if e["memory"] else ""))
         (gen / "Years" / f"{year}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return sorted(by_year, reverse=True)
 
@@ -525,6 +588,7 @@ def _write_index(gen: Path, media: list, summaries: list[dict], years: list[str]
         "", "## Collections (your folders, best clips by purpose)",
         *[f"- [[{_slug(c, 80)}]]" for c in (collections or [])],
         "- [[Ideas]]: story seeds and ready-made reel recipes from the whole library",
+        "- [[Interview queue]]: big events with no memory yet (what they meant to you)",
         "- [[People]]: face groups (named / hidden)",
         "- [[Videos]]: reels made so far, their styles and results",
         "", "## Years", *[f"- [[{y}]]" for y in years],
@@ -637,6 +701,28 @@ status: idea   # idea | scripted | posted
 - (moment ids or event links from search)
 
 ## Hook ideas
+""",
+    "Memories/_Memory template.md": """---
+type: memory
+event_id:          # from the event note's properties: links this memory to it
+date:
+era:
+people: []
+feeling:           # e.g. proud, free, lost, nervous, grateful
+importance:        # 1-5: how much it matters to you now
+---
+# What happened that day, in a line
+
+## What it meant
+(One or two sentences in the creator's own words. Shown on the event note and the year.)
+
+## What happened
+(Facts from the interview: who, why, what led to it, what came after.)
+
+## Content angle
+(Could this become a reel? Which hook? Link a Story if one exists.)
+
+Source: [[Interviews/...]] · Event: [[_generated/Events/...]]
 """,
     "People/.keep": "",
     "Places/.keep": "",

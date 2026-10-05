@@ -6,7 +6,8 @@ description: Suggest reel ideas from the creator's own footage and life story - 
 # Content ideas from the archive
 
 Read, in the vault (`library_dir/LifeVault`):
-1. `Me.md` (who they are, pillars, pages), `Eras/`, `Stories/` - the story layer.
+1. `Me.md` (who they are, pillars, pages), `Eras/`, `Memories/`, `Stories/`. This is the story
+   layer. Memories with high `importance` and a clear feeling are the strongest stories.
 2. `_generated/Ideas.md` - story seeds (things that happened, often told to camera) and unused
    strong moments, best first.
 3. `_generated/Collections/<name>.md` - per trip/period: story seeds, best hooks, cinematic,
