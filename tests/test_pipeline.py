@@ -1104,3 +1104,34 @@ def test_photo_model_separate(env, monkeypatch):
     assert "gemini-3.5-flash-lite" in used and cfg.gemini_model in used
     models = {r["kind"]: r["model"] for r in conn.execute("SELECT kind, model FROM requests")}
     assert models["photos"] == "gemini-3.5-flash-lite" and models["video"] == cfg.gemini_model
+
+
+def test_out_of_credit_stops_run_and_recovers(env, monkeypatch):
+    from google.genai import errors
+
+    from contentrag import gemini
+
+    cfg, conn = env
+    cfg.transcribe_enabled = False
+    cfg.gemini_workers = 1
+    scan(cfg, conn, log=lambda *_: None)
+    prep(cfg, conn, log=lambda *_: None)
+    monkeypatch.setattr(gemini.time, "sleep", lambda s: None)
+
+    class NoCredit:
+        def generate_content(self, model, contents, config):
+            raise errors.ClientError(402, {"error": {"code": 402, "status": "RESOURCE_EXHAUSTED",
+                                                     "message": "Your prepayment credits are depleted."}})
+
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=NoCredit()))
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert "credits ran out" in stats["fatal"] and stats["pending"] == 1  # stopped at the first one
+    assert conn.execute("SELECT max(coalesce(attempts,0)) FROM requests").fetchone()[0] == 0
+
+    # requests that an older version marked as failed for this reason come back with their attempts
+    conn.execute("UPDATE requests SET status='error', attempts=3, error=? ",
+                  ("402 RESOURCE_EXHAUSTED. {'error': {'code': 402, 'message': 'Your prepayment credits are depleted.'}}",))
+    conn.commit()
+    monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
+    stats = gemini.run(cfg, conn, log=lambda *_: None)
+    assert stats["done"] == 5 and not stats.get("fatal")

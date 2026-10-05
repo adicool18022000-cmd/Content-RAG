@@ -145,7 +145,7 @@ class EmptyExcerpt(RuntimeError):
 
 
 # Errors that are about the key/model, not the clip: stop the run without using attempts.
-FATAL_CODES = (401, 403, 404)
+FATAL_CODES = (401, 402, 403, 404)  # stop the whole run: no request can succeed until fixed
 
 
 def _explain(e) -> GeminiError:
@@ -153,7 +153,11 @@ def _explain(e) -> GeminiError:
     status = getattr(e, "status", "") or ""
     msg = (getattr(e, "message", None) or str(e)).strip().replace("\n", " ")[:300]
     hint = ""
-    if code == 429:
+    if code == 402 or any(k in msg.lower() for k in ("credits are depleted", "prepayment", "billing account")):
+        code = 402
+        hint = (" — your Gemini prepaid credits ran out. Add credit in AI Studio (ai.studio → your project →"
+                " Billing), then start again: files that failed because of this are retried automatically.")
+    elif code == 429:
         hint = (" — Gemini quota / rate limit. If the key's Google project has no billing enabled it is on the"
                 " free tier, which allows only a few requests per day: enable billing in AI Studio, or wait.")
     elif code in (500, 503, 504):
@@ -405,10 +409,23 @@ def spent(cfg: Config, conn) -> dict:
 
 # ------------------------------------------------------------------ run
 
+def recover_billing_failures(conn) -> int:
+    """Requests that failed because the account had no credit (not the file's fault) go back to
+    pending with their attempts restored."""
+    cur = conn.execute(
+        "UPDATE requests SET status='pending', attempts=0, error=NULL WHERE status='error' AND "
+        "(error LIKE '%402%' OR error LIKE '%credits are depleted%' OR error LIKE '%prepayment%')")
+    conn.commit()
+    return cur.rowcount
+
+
 def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=print,
         stop: threading.Event | None = None) -> dict:
     """Describe everything pending (or, with retry=True, what failed before). Resumable."""
     plan_requests(cfg, conn)
+    restored = recover_billing_failures(conn)
+    if restored:
+        log(f"[gemini] {restored} requests that failed only because credits ran out are queued again")
     statuses = ("error", "refused") if retry else ("pending",)
     reqs = conn.execute(
         f"SELECT * FROM requests WHERE status IN ({','.join('?' * len(statuses))}) "
