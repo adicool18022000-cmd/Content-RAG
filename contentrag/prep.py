@@ -49,9 +49,14 @@ def detect_cuts(src: Path, duration: float, threshold: float = 0.3) -> list[floa
 
 
 def extract_audio(src: Path, out: Path) -> bool:
+    from .probe import audio_stream
+
     out.parent.mkdir(parents=True, exist_ok=True)
-    r = _run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
-              "-c:a", "pcm_s16le", str(out)], timeout=600)
+    a = audio_stream(src)
+    if a is None:
+        return False
+    r = _run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-map", f"0:{a}", "-vn", "-ac", "1",
+              "-ar", "16000", "-c:a", "pcm_s16le", str(out)], timeout=600)
     return r.returncode == 0 and out.exists()
 
 

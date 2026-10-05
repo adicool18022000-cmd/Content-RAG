@@ -61,7 +61,12 @@ def probe(path: Path) -> dict:
 
 
 def speech_ranges(path: Path, duration: float, silence: float, noise_db: int = -32) -> list[tuple[float, float]]:
-    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "info", "-i", str(path), "-vn",
+    from ..probe import audio_stream
+
+    a = audio_stream(path)
+    if a is None:
+        return [(0.0, duration)]
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "info", "-i", str(path), "-map", f"0:{a}", "-vn",
                         "-af", f"silencedetect=noise={noise_db}dB:d={silence}", "-f", "null", "-"],
                        capture_output=True, text=True, timeout=900)
     starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", r.stderr)]
@@ -102,8 +107,16 @@ def transcribe(cfg: Config, path: Path, log=print) -> list[Word]:
     try:
         import mlx_whisper  # type: ignore
 
-        res = mlx_whisper.transcribe(str(path), path_or_hf_repo=cfg.whisper_model, language=cfg.language or None,
-                                     word_timestamps=True, condition_on_previous_text=False)
+        import tempfile
+
+        from ..prep import extract_audio
+
+        with tempfile.TemporaryDirectory() as tmp:  # a clean mono wav (iPhone spatial audio is skipped)
+            wav = Path(tmp) / "voice.wav"
+            if not extract_audio(path, wav):
+                raise RuntimeError(f"no usable audio track in {path.name}")
+            res = mlx_whisper.transcribe(str(wav), path_or_hf_repo=cfg.whisper_model, language=cfg.language or None,
+                                         word_timestamps=True, condition_on_previous_text=False)
         return [Word(float(w["start"]), float(w["end"]), w["word"].strip())
                 for seg in res.get("segments", []) for w in seg.get("words", []) if w.get("word", "").strip()]
     except ImportError:

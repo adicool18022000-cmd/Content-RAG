@@ -1135,3 +1135,31 @@ def test_out_of_credit_stops_run_and_recovers(env, monkeypatch):
     monkeypatch.setattr(gemini, "client", lambda cfg: SimpleNamespace(models=_FakeModels()))
     stats = gemini.run(cfg, conn, log=lambda *_: None)
     assert stats["done"] == 5 and not stats.get("fatal")
+
+
+def test_iphone_spatial_audio_track_is_skipped(tmp_path, monkeypatch):
+    from contentrag import gemini, probe
+    from contentrag.pull import cut_clip
+
+    # an iPhone 16 style file: AAC plus a second audio track ffmpeg can't decode (APAC)
+    fake = {"streams": [{"index": 0, "codec_type": "video", "codec_name": "hevc"},
+                        {"index": 1, "codec_type": "audio", "codec_name": "apple_apac"},
+                        {"index": 2, "codec_type": "audio", "codec_name": "aac"}]}
+    monkeypatch.setattr(probe, "ffprobe", lambda p: fake)
+    assert probe.audio_stream(tmp_path / "x.mov") == 2
+    fake["streams"] = fake["streams"][:2]
+    assert probe.audio_stream(tmp_path / "x.mov") is None  # only APAC: use the picture without sound
+    monkeypatch.undo()
+
+    src = tmp_path / "two_tracks.mov"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25:duration=3",
+                    "-f", "lavfi", "-i", "sine=f=300:d=3", "-f", "lavfi", "-i", "sine=f=900:d=3:sample_rate=48000",
+                    "-map", "0", "-map", "1", "-map", "2", "-c:v", "libx264", "-c:a:0", "aac", "-c:a:1", "pcm_s16le",
+                    str(src)], check=True)
+    out = gemini.make_proxy(src, 0, 3, tmp_path / "proxy.mp4", True)
+    streams = probe.ffprobe(out)["streams"]
+    assert [s["codec_type"] for s in streams].count("audio") == 1
+    ok, err = cut_clip(src, 0.5, 2.0, tmp_path / "blur.mp4", reframe="blur", width=360, height=640)
+    assert ok, err
+    info = probe.ffprobe(tmp_path / "blur.mp4")["streams"]
+    assert any(s["codec_type"] == "video" and s["width"] == 360 for s in info)

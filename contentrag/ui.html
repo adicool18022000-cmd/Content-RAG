@@ -93,7 +93,7 @@ code { font-size: 11px; word-break: break-all; color: var(--muted); }
       <h2>People</h2>
       <div class="note" style="margin-top:0">Faces found on this Mac. Name a group (same name = same person). "Hide" keeps
         that person out of every search, export and edit; the rest of those clips stays usable.</div>
-      <div id="people" style="display:grid;gap:6px;margin-top:8px"></div>
+      <div id="people" style="display:grid;gap:6px;margin-top:8px;max-height:560px;overflow-y:auto;padding-right:4px"></div>
     </section>
 
     <section>
@@ -358,22 +358,40 @@ $("results").addEventListener("click", (e) => {
 });
 $("player").addEventListener("close", () => $("video").pause());
 
-async function loadPeople() {
-  const j = await (await fetch("/api/people?limit=40")).json();
-  const el = $("people");
-  if (!j.people || !j.people.length) { el.innerHTML = `<div class="note">None yet — run "Group faces".</div>`; return; }
-  el.innerHTML = j.people.map(p => `<div style="display:flex;gap:8px;align-items:center">
-      ${p.sample_url ? `<img src="${p.sample_url}" style="width:44px;height:44px;border-radius:50%;object-fit:cover">` : ""}
+let peopleShown = 30;
+function personRow(p) {
+  return `<div style="display:flex;gap:8px;align-items:center">
+      ${p.sample_url ? `<img src="${p.sample_url}" loading="lazy" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex:none">` : ""}
       <input data-pid="${p.id}" class="pname" value="${esc(p.name || "")}" placeholder="#${p.id} name" style="flex:1;min-width:0">
       <span class="chip">${p.clips} clips</span>
-      <button data-hide="${p.id}" data-on="${p.hidden ? 0 : 1}">${p.hidden ? "Unhide" : "Hide"}</button></div>`).join("");
+      <button data-hide="${p.id}" data-on="${p.hidden ? 0 : 1}">${p.hidden ? "Unhide" : "Hide"}</button></div>`;
 }
+async function loadPeople() {
+  const j = await (await fetch("/api/people?limit=5000")).json();
+  const el = $("people");
+  if (!j.people || !j.people.length) { el.innerHTML = `<div class="note">None yet — run "Group faces".</div>`; return; }
+  const keepScroll = el.scrollTop, wasOpen = !!(el.querySelector("details") || {}).open;
+  const todo = j.people.filter(p => !p.name && !p.hidden);
+  const done = j.people.filter(p => p.name || p.hidden);
+  el.innerHTML =
+    `<div class="note">To name: <b>${todo.length}</b> (biggest groups first) · named or hidden: <b>${done.length}</b>.
+       Typing a name that already exists merges the two groups.</div>` +
+    todo.slice(0, peopleShown).map(personRow).join("") +
+    (todo.length > peopleShown ? `<button id="peopleMore">Show ${Math.min(30, todo.length - peopleShown)} more (${todo.length - peopleShown} left)</button>` : "") +
+    (done.length ? `<details${wasOpen ? " open" : ""}><summary>Named &amp; hidden (${done.length})</summary>
+       <div style="display:grid;gap:6px;margin-top:6px">${done.map(personRow).join("")}</div></details>` : "");
+  el.scrollTop = keepScroll;
+}
+$("people").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.classList.contains("pname")) e.target.blur();
+});
 $("people").addEventListener("change", async (e) => {
   if (!e.target.classList.contains("pname") || !e.target.value.trim()) return;
   await post("/api/people", {id: +e.target.dataset.pid, name: e.target.value.trim()});
   loadPeople();
 });
 $("people").addEventListener("click", async (e) => {
+  if (e.target.id === "peopleMore") { peopleShown += 30; loadPeople(); return; }
   const id = e.target.dataset.hide;
   if (!id) return;
   const on = e.target.dataset.on === "1";

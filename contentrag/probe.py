@@ -146,6 +146,25 @@ def ffprobe(path: Path) -> dict:
     return json.loads(out.stdout)
 
 
+# Audio codecs some ffmpeg builds can't decode. iPhone 16+ videos carry an extra Apple spatial-audio
+# track (APAC) next to the normal AAC one; ffmpeg would pick it as the "best" stream and fail.
+UNDECODABLE_AUDIO = {"apple_apac"}
+
+
+def audio_stream(path: Path) -> int | None:
+    """Index of the audio stream to use: the first one ffmpeg can decode (stereo AAC preferred).
+    None when there is no usable audio."""
+    try:
+        streams = [s for s in ffprobe(path).get("streams", []) if s.get("codec_type") == "audio"]
+    except Exception:  # noqa: BLE001 - unreadable: let ffmpeg pick
+        return None
+    usable = [s for s in streams if s.get("codec_name") not in UNDECODABLE_AUDIO]
+    if not usable:
+        return None
+    best = next((s for s in usable if s.get("codec_name") == "aac"), usable[0])
+    return int(best["index"])
+
+
 def _rate(value: str | None) -> float | None:
     if not value or value in ("0/0", "0"):
         return None

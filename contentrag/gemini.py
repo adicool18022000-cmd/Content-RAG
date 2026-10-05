@@ -102,11 +102,14 @@ def list_models(cfg: Config) -> list[str]:
 # ------------------------------------------------------------------ proxies
 
 def make_proxy(src: Path, start: float, duration: float, out: Path, has_audio: bool) -> Path:
+    from .probe import audio_stream
+
+    a = audio_stream(src) if has_audio else None
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{duration:.2f}",
-           "-i", str(src),
+           "-i", str(src), "-map", "0:v:0",
            "-vf", "scale='if(gt(iw,ih),640,-2)':'if(gt(iw,ih),-2,640)',fps=2",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-pix_fmt", "yuv420p"]
-    cmd += ["-c:a", "aac", "-b:a", "40k", "-ac", "1"] if has_audio else ["-an"]
+    cmd += ["-map", f"0:{a}", "-c:a", "aac", "-b:a", "40k", "-ac", "1"] if a is not None else ["-an"]
     try:
         r = subprocess.run(cmd + ["-movflags", "+faststart", str(out)], capture_output=True, text=True,
                            timeout=max(300, duration * 3))
@@ -409,12 +412,17 @@ def spent(cfg: Config, conn) -> dict:
 
 # ------------------------------------------------------------------ run
 
+# Failures that were not the file's fault and are fixed now: such requests get their attempts back.
+RECOVERABLE_ERRORS = ("%402%", "%credits are depleted%", "%prepayment%",   # account ran out of credit
+                      "%apple_apac%", "%no decoder found%")                # iPhone spatial-audio track
+
+
 def recover_billing_failures(conn) -> int:
-    """Requests that failed because the account had no credit (not the file's fault) go back to
-    pending with their attempts restored."""
-    cur = conn.execute(
-        "UPDATE requests SET status='pending', attempts=0, error=NULL WHERE status='error' AND "
-        "(error LIKE '%402%' OR error LIKE '%credits are depleted%' OR error LIKE '%prepayment%')")
+    """Requests that failed for a reason that wasn't the file's fault (no credit, iPhone spatial
+    audio before it was handled) go back to pending with their attempts restored."""
+    where = " OR ".join("error LIKE ?" for _ in RECOVERABLE_ERRORS)
+    cur = conn.execute(f"UPDATE requests SET status='pending', attempts=0, error=NULL "
+                       f"WHERE status='error' AND ({where})", RECOVERABLE_ERRORS)
     conn.commit()
     return cur.rowcount
 
@@ -425,7 +433,7 @@ def run(cfg: Config, conn, limit: int | None = None, retry: bool = False, log=pr
     plan_requests(cfg, conn)
     restored = recover_billing_failures(conn)
     if restored:
-        log(f"[gemini] {restored} requests that failed only because credits ran out are queued again")
+        log(f"[gemini] {restored} requests that failed for reasons now fixed (credit, iPhone audio) are queued again")
     statuses = ("error", "refused") if retry else ("pending",)
     reqs = conn.execute(
         f"SELECT * FROM requests WHERE status IN ({','.join('?' * len(statuses))}) "

@@ -75,12 +75,17 @@ def cut_clip(src: Path, start: float, end: float, out: Path, reframe: str | None
     vf = reframe_filter(reframe, width, height)
     if fps:
         vf = f"{vf},fps={fps}" if vf else f"fps={fps}"
+    from .probe import audio_stream
+
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src),
            "-t", f"{end - start:.3f}"]
-    if vf:
-        cmd += ["-filter_complex" if ";" in vf or "[" in vf else "-vf", vf]
+    if vf and (";" in vf or "[" in vf):
+        cmd += ["-filter_complex", f"[0:v:0]{vf}[vout]", "-map", "[vout]"]
+    else:
+        cmd += ["-map", "0:v:0"] + (["-vf", vf] if vf else [])
     cmd += [*_encoder(), "-pix_fmt", "yuv420p"]
-    cmd += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"] if audio else ["-an"]
+    a = audio_stream(src) if audio else None  # skips iPhone spatial-audio tracks ffmpeg can't decode
+    cmd += ["-map", f"0:{a}", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"] if a is not None else ["-an"]
     cmd += ["-movflags", "+faststart", str(out)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
