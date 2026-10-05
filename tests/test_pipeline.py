@@ -996,6 +996,9 @@ def test_transition_library_from_premiere_template(env, monkeypatch, tmp_path):
     res = transitions.import_template(cfg, tpl / "fx.xml", log=lambda *_: None)
     assert res["recipes"] == 2 and res["usable"] == 2 and not res["missing"]
     assert transitions.import_template(cfg, tpl, log=lambda *_: None)["recipes"] == 2  # the folder works too
+    monkeypatch.setattr("contentrag.drive.drive_of", lambda cfg: tmp_path)
+    assert transitions.find_templates(cfg) == [tpl / "fx.xml"]
+    assert transitions.import_template(cfg, tmp_path / "nope", log=lambda *_: None)["recipes"] == 2  # found anyway
     lib = {r["id"]: r for r in transitions.load_library(cfg)}
     snap, riser = lib["T01"], lib["T02"]
     assert snap["offset"] == pytest.approx(-0.1) and snap["plate_in"] == pytest.approx(2.8)

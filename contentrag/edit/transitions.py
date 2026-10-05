@@ -171,12 +171,49 @@ def _find(name: str, original: str, search: list[Path]) -> Path | None:
     return None
 
 
-def import_template(cfg: Config, xml_path: Path, media: Path | None = None, log=print) -> dict:
-    """Copy a template's plates + SFX into the library and (re)write transitions.json."""
+TEMPLATE_MARK = re.compile(r"<name>\s*T\d+\b")
+
+
+def is_template(path: Path) -> bool:
+    try:
+        return path.stat().st_size < 50_000_000 and bool(TEMPLATE_MARK.search(path.read_text(errors="ignore")))
+    except OSError:
+        return False
+
+
+def find_templates(cfg: Config) -> list[Path]:
+    """Premiere template XMLs (markers like 'T01 SNAP - CUT') on the drive the library is on."""
+    import os
+
+    from ..drive import drive_of
+    from ..scan import SKIP_DIRS
+
+    skip = {(cfg.library_dir / d).resolve() for d in ("app", "frames", "audio", "exports", "LifeVault", "models")}
+    out = []
+    for dirpath, dirnames, filenames in os.walk(drive_of(cfg)):
+        dirnames[:] = [n for n in dirnames if not n.startswith(".") and n not in SKIP_DIRS
+                       and (Path(dirpath) / n).resolve() not in skip]
+        out += [Path(dirpath) / f for f in filenames
+                if f.lower().endswith(".xml") and not f.startswith(".") and is_template(Path(dirpath) / f)]
+    return sorted(out)
+
+
+def import_template(cfg: Config, xml_path: Path | None = None, media: Path | None = None, log=print) -> dict:
+    """Copy a template's plates + SFX into the library and (re)write transitions.json.
+    xml_path: the XML, its folder, or None to look for it on the drive."""
+    if xml_path is None or not Path(xml_path).expanduser().exists():
+        if xml_path is not None:
+            log(f"[transitions] {xml_path} doesn't exist; looking for the template on the drive...")
+        found = find_templates(cfg)
+        if len(found) != 1:
+            listing = "\n  ".join(str(f) for f in found) or "(none found: copy the template folder onto the drive)"
+            raise SystemExit(("Several templates found, import one by its path:" if found else
+                              "No Premiere template XML (markers like 'T01 SNAP - CUT') found.") + f"\n  {listing}")
+        xml_path = found[0]
+        log(f"[transitions] using {xml_path}")
     xml_path = Path(xml_path).expanduser()
     if xml_path.is_dir():  # a template folder: use the sequence XML inside it
-        found = [x for x in sorted(xml_path.rglob("*.xml")) if not x.name.startswith(".")
-                 and re.search(r"<name>\s*T\d+", x.read_text(errors="ignore"))]
+        found = [x for x in sorted(xml_path.rglob("*.xml")) if not x.name.startswith(".") and is_template(x)]
         if not found:
             raise SystemExit(f"No template XML with transitions (markers like 'T01 SNAP - CUT') in {xml_path}")
         if len(found) > 1:

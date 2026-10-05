@@ -282,13 +282,12 @@ def cmd_assets(args):
 
     cfg = load_config(args.config)
     if args.action == "import":
-        if not args.xml:
-            raise SystemExit("usage: crag assets import <template.xml> [--media <folder>]")
-        print(json.dumps(transitions.import_template(cfg, Path(args.xml), args.media and Path(args.media)), indent=2))
+        xml = Path(args.xml) if args.xml else None  # nothing given: found on the drive
+        print(json.dumps(transitions.import_template(cfg, xml, args.media and Path(args.media)), indent=2))
         return
     print(json.dumps(asset_report(cfg) | {"transitions": len(transitions.load_library(cfg))}, indent=2))
     if args.action == "transitions":
-        print("\n".join(transitions.summary(cfg)) or "no transition library yet: crag assets import <template.xml>")
+        print("\n".join(transitions.summary(cfg)) or "no transition library yet: crag assets import")
 
 
 def cmd_folders(args):
@@ -548,7 +547,8 @@ def main(argv=None):
 
     sp = sub.add_parser("assets", help="assets folder (light leaks, SFX, LUTs, fonts) + transition library")
     sp.add_argument("action", nargs="?", choices=["show", "import", "transitions"], default="show",
-                    help="import <template.xml or its folder>: flash/leak + SFX recipes from a Premiere template")
+                    help="import [template.xml or its folder]: flash/leak + SFX recipes from a Premiere template "
+                         "(without a path it is found on the drive)")
     sp.add_argument("xml", nargs="?")
     sp.add_argument("--media", help="folder with the template's plates and SFX (default: next to the XML)")
     sp.set_defaults(fn=cmd_assets)
