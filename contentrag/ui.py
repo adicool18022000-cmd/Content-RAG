@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .config import BACKENDS, Config, set_backend
+from .config import BACKENDS, PRIVACY_MODES, Config, set_backend, set_value
 from .db import connect, failures
 from .util import source_path
 
@@ -154,6 +154,7 @@ def status(cfg: Config, job: Job) -> dict:
             "library": str(cfg.library_dir),
             "backend": cfg.backend,
             "backends": BACKENDS,
+            "privacy_mode": cfg.privacy_mode, "privacy_modes": PRIVACY_MODES,
             "model": {"gemini": cfg.gemini_model, "claude-code": cfg.cc_model}.get(cfg.backend, cfg.model),
             "key_env": {"gemini": cfg.gemini_api_key_env, "claude": "ANTHROPIC_API_KEY"}.get(cfg.backend),
             "transcribe_enabled": cfg.transcribe_enabled,
@@ -361,6 +362,15 @@ def make_handler(cfg: Config, job: Job):
                     job.params = {"ids": ids, "name": str(body.get("name") or "selects")[:60]}
                 ok, msg = job.start(step)
                 return self._json({"ok": ok, "message": msg}, 200 if ok else 409)
+            if url.path == "/api/privacy":
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                mode = body.get("mode")
+                if mode not in PRIVACY_MODES:
+                    return self._json({"error": "unknown mode"}, 400)
+                if cfg.source:
+                    set_value(cfg.source, "privacy", "hidden_people", mode)
+                cfg.privacy_mode = mode
+                return self._json({"ok": True, "mode": mode})
             if url.path == "/api/backend":
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 name = body.get("backend")

@@ -660,15 +660,47 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
     assert conn.execute("SELECT hidden FROM people WHERE id=?", (late,)).fetchone()[0] == 1
     ranges = hidden_ranges(conn, goa)
     assert ranges and ranges[0][0] <= 4.0 and ranges[-1][1] >= 8.0
-    for r in search(cfg, conn, "colour bars", use_vectors=False, limit=50):
-        if r["media_id"] == goa:
-            assert r["end"] <= 4.0 - 1.0 or r["start"] >= 8.0, r  # never overlaps her
+    cut = [r for r in search(cfg, conn, "", Filters(kind="video"), use_vectors=False, limit=200) if r["media_id"] == goa]
+    assert cut
+    for r in cut:
+        assert r["end"] <= 4.0 - 1.0 or r["start"] >= 8.0, r  # never overlaps her
     mo = conn.execute("SELECT id FROM moments WHERE media_id=? AND start <= 5 AND end >= 7", (goa,)).fetchone()
     if mo:
         res = pull(cfg, conn, [mo["id"]], "privacy", log=lambda *_: None)
         sel = json.loads((Path(res["folder"]) / "selects.json").read_text())
         for s in sel:
             assert s["source_out"] <= 4.0 or s["source_in"] >= 8.0
+
+    # blur mode: the whole moment stays usable and her face is blurred in anything exported
+    from contentrag.edit.plan import Clip, EditPlan
+    from contentrag.edit.run import _blurred_sources, protect_hidden_people
+    from contentrag.usage import face_boxes
+
+    cfg.privacy_mode = "blur"
+    res = [r for r in search(cfg, conn, "", Filters(kind="video"), use_vectors=False, limit=200) if r["media_id"] == goa]
+    full = next(r for r in res if r["blur_faces"])
+    assert full["start"] < 8.0 and full["end"] > 4.0 and not full["trimmed_for_privacy"]
+    boxes = face_boxes(conn, goa, 0, 12)
+    assert boxes and all(0 <= b[1] <= 1 and 0 < b[3] <= 1 and 0 < b[4] <= 1 for b in boxes)
+    out = pull(cfg, conn, [full["moment_id"]], "blurred", log=lambda *_: None)
+    assert out["pulled"] == 1
+    cfg.privacy_mode = "cut"
+    # edits: safety net blurs hidden faces in any clip, and Premiere/AE point at the blurred piece
+    plan = EditPlan("t")
+    plan.clips = [Clip("broll", "orig.mp4", 3.0, 9.0, 0.0, media_id=goa)]
+    assert protect_hidden_people(conn, plan) == 1 and plan.clips[0].blur
+    exp = _blurred_sources(plan, [{"index": 0, "path": Path("piece.mp4")}])
+    assert exp.clips[0].file == "piece.mp4" and exp.clips[0].src_in == 0 and plan.clips[0].file == "orig.mp4"
+    # photos with a hidden person never appear, in either mode
+    photo = conn.execute("SELECT id FROM media WHERE kind='photo' LIMIT 1").fetchone()["id"]
+    assert any(r["media_id"] == photo for r in search(cfg, conn, "", Filters(kind="photo"), use_vectors=False))
+    conn.execute("INSERT INTO faces(media_id, t, x, y, w, h, score, emb, person_id) VALUES (?,0,10,10,50,50,0.9,?,?)",
+                 (photo, a.tobytes(), pa))
+    conn.commit()
+    for mode in ("cut", "blur"):
+        cfg.privacy_mode = mode
+        assert not any(r["media_id"] == photo for r in search(cfg, conn, "", Filters(kind="photo"), use_vectors=False))
+    cfg.privacy_mode = "cut"
 
 
 def test_collection_notes_and_ideas(env, monkeypatch):

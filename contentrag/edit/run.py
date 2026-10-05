@@ -35,6 +35,9 @@ def render_plan(cfg: Config, conn, plan: EditPlan, targets: set[str], log=print)
     from .render import materialize, render_mp4, summary, write_srt
 
     d = out_dir(cfg, plan.name)
+    blurred = protect_hidden_people(conn, plan)
+    if blurred:
+        log(f"[edit] blurring hidden people's faces in {blurred} clip(s)")
     plan_path = plan.save(d / "plan.json")
     fonts = cfg.library_dir / "assets" / "fonts"
     if fonts.is_dir() and any(fonts.iterdir()) and not (d / "fonts").exists():
@@ -47,9 +50,38 @@ def render_plan(cfg: Config, conn, plan: EditPlan, targets: set[str], log=print)
         write_srt(plan.captions, d / "captions.srt")
     if "mp4" in targets:
         out["mp4"] = str(render_mp4(plan, d, pieces, log=log))
-    out.update(export_all(plan, d, pieces, targets))
+    out.update(export_all(_blurred_sources(plan, pieces), d, pieces, targets))
     record_video(conn, plan.name, page=plan.page, style=plan.style, uses=plan.uses())
     _write_readme(plan, d, out)
+    return out
+
+
+def protect_hidden_people(conn, plan: EditPlan) -> int:
+    """Safety net, whatever the privacy mode: every library clip in the plan gets the faces of hidden
+    people that are on screen during its range blurred. Returns how many clips need it."""
+    from ..usage import face_boxes, hidden_sets
+
+    people = hidden_sets(conn)["person"]
+    n = 0
+    for c in plan.clips:
+        c.blur = [list(b) for b in face_boxes(conn, c.media_id, c.src_in, c.src_out, people)] \
+            if c.media_id and people else []
+        n += bool(c.blur)
+    return n
+
+
+def _blurred_sources(plan: EditPlan, pieces: list[dict]) -> EditPlan:
+    """Premiere / After Effects reference the original footage; for clips that need blurring they must
+    point at the blurred, already cut piece instead, so no unblurred face reaches an export."""
+    import copy
+
+    if not any(c.blur for c in plan.clips):
+        return plan
+    out = copy.deepcopy(plan)
+    by_index = {p["index"]: p for p in pieces}
+    for i, c in enumerate(out.clips):
+        if c.blur and i in by_index:
+            c.file, c.src_in, c.src_out, c.reframe = str(by_index[i]["path"]), 0.0, round(c.length, 3), None
     return out
 
 

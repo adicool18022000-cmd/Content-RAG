@@ -164,18 +164,35 @@ def cmd_people(args):
     from .usage import unhide
 
     cfg, conn = _open(args)
+    names = " ".join(args.name) if isinstance(args.name, list) else (args.name or "")
     if args.action == "name":
-        name_person(conn, int(args.ref.lstrip("#")), args.name or "")
-        print(f"group {args.ref} is now '{args.name or '(unnamed)'}'")
+        name_person(conn, int(args.ref.lstrip("#")), names)
+        print(f"group {args.ref} is now '{names or '(unnamed)'}'")
     elif args.action == "split":
         ids = split_person(cfg, conn, int(args.ref.lstrip("#")))
         print(f"group {args.ref} -> {len(ids)} groups: {', '.join('#' + str(i) for i in ids)} (same name for now)")
-    elif args.action == "hide":
-        print(json.dumps(hide_people(cfg, conn, args.ref), indent=2))
-    elif args.action == "unhide":
-        for pid in resolve_people(conn, args.ref):
-            unhide(conn, "person", str(pid))
-        print(f"unhidden: {args.ref}")
+    elif args.action in ("hide", "unhide"):
+        refs = [args.ref, *(args.name or [])]  # several people at once: crag people hide "Richa (ex)" Rinki
+        missing = []
+        for ref in refs:
+            try:
+                ids = resolve_people(conn, ref)
+            except SystemExit:
+                missing.append(ref)
+                continue
+            if args.action == "hide":
+                hide_people(cfg, conn, ref, dense=False)
+            else:
+                for pid in ids:
+                    unhide(conn, "person", str(pid))
+            print(f"{args.action}: {ref} ({len(ids)} face group{'s' if len(ids) != 1 else ''})")
+        if args.action == "hide" and len(missing) < len(refs):
+            from .faces import refine_hidden
+
+            print("checking their clips second by second for exact on-screen times (can take a while)...")
+            print(json.dumps(refine_hidden(cfg, conn), indent=2))
+        if missing:
+            print("not found (check the spelling in the dashboard's People tab): " + ", ".join(missing))
     else:
         for p in list_people(conn, args.min_faces):
             print(f"#{p['id']:<5} {p['name'] or '(unnamed)':<20} faces={p['faces']:<5} clips={p['clips']:<5} "
@@ -300,6 +317,20 @@ def cmd_folders(args):
         print(f"... {len(rows) - args.limit} more (--limit {len(rows)})")
 
 
+def cmd_privacy(args):
+    """Show or set what happens to clips with hidden people (writes [privacy] in contentrag.toml)."""
+    from .config import DEFAULT_CONFIG, PRIVACY_MODES, set_value
+
+    if args.mode:
+        path = Path(args.config or os.environ.get("CONTENTRAG_CONFIG", DEFAULT_CONFIG)).expanduser()
+        set_value(path, "privacy", "hidden_people", args.mode)
+    cfg = load_config(args.config)
+    for k, v in PRIVACY_MODES.items():
+        print(f"{'*' if k == cfg.privacy_mode else ' '} {k:<5} {v}")
+    print("Photos with a hidden person are always left out. Any hidden face still inside a clip that goes into "
+          "an edit or export is blurred.")
+
+
 def cmd_backend(args):
     """Show or switch the AI analysis backend (writes [describe] backend in contentrag.toml)."""
     from .config import BACKENDS, DEFAULT_CONFIG, set_backend
@@ -412,6 +443,8 @@ def cmd_run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crag", description="Personal footage index + Obsidian life vault")
     p.add_argument("-c", "--config", help="path to contentrag.toml (default: ./contentrag.toml)")
+    p.add_argument("--privacy", choices=["cut", "blur"],
+                   help="clips with hidden people, for this command only: cut their moments out, or blur faces")
     p.add_argument("--backend", choices=["gemini", "claude-code", "claude"],
                    help="use this AI backend for this command only (crag backend <name> switches for good)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -474,8 +507,9 @@ def main(argv=None):
     sp = sub.add_parser("people", help="list face groups, name them, hide someone everywhere")
     sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "split", "hide", "unhide"])
     sp.add_argument("ref", nargs="?", help="group id (#7) or name")
-    sp.add_argument("name", nargs="?", help="for 'name': the person's name (groups with the same name = one person; "
-                                                "empty = unnamed). 'split <id>' separates a group's faces again")
+    sp.add_argument("name", nargs="*", help="for 'name': the person's name (groups with the same name = one person; "
+                                            "empty = unnamed). 'hide'/'unhide' take several names. "
+                                            "'split <id>' separates a group's faces again")
     sp.add_argument("--min-faces", type=int, default=3)
     sp.set_defaults(fn=cmd_people)
 
@@ -522,6 +556,9 @@ def main(argv=None):
     sp.add_argument("--under", help="only this folder, one level deeper, e.g. 'Disk D/mobile files'")
     sp.add_argument("--limit", type=int, default=60)
     sp.set_defaults(fn=cmd_folders)
+    sp = sub.add_parser("privacy", help="clips with hidden people: cut their moments out, or blur their faces")
+    sp.add_argument("mode", nargs="?", choices=["cut", "blur"])
+    sp.set_defaults(fn=cmd_privacy)
     sp = sub.add_parser("backend", help="show or switch the AI analysis backend: gemini | claude-code | claude")
     sp.add_argument("name", nargs="?", choices=["gemini", "claude-code", "claude"])
     sp.set_defaults(fn=cmd_backend)
@@ -566,6 +603,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     if args.backend:
         os.environ["CRAG_BACKEND"] = args.backend
+    if args.privacy:
+        os.environ["CRAG_PRIVACY"] = args.privacy
     args.fn(args)
 
 

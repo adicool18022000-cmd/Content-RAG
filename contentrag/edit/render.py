@@ -36,7 +36,8 @@ def materialize(plan: EditPlan, out_dir: Path, log=print) -> list[dict]:
         if not out.exists():
             ok, err = cut_clip(Path(c.file), c.src_in, c.src_out, out,
                                reframe="crop" if c.track != "broll" else (c.reframe or "crop"),
-                               fps=plan.fps, audio=want_audio, width=plan.width, height=plan.height)
+                               fps=plan.fps, audio=want_audio, width=plan.width, height=plan.height,
+                               blur=[tuple(b) for b in c.blur])
             if not ok:
                 raise RuntimeError(f"couldn't cut {Path(c.file).name} {c.src_in}-{c.src_out}: {err}")
         pieces.append({"index": i, "path": out, "audio": want_audio and _has_audio(out)})

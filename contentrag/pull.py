@@ -19,7 +19,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from .config import Config
-from .usage import collection_hidden, hidden_ranges, hidden_sets, record_video, safe_parts
+from .usage import (collection_hidden, face_boxes, hidden_ranges, hidden_sets, photo_has_hidden_person,
+                    record_video, safe_parts)
 from .util import fmt_ts, source_path
 
 HANDLES = 0.5  # seconds kept before/after each moment
@@ -70,8 +71,27 @@ def reframe_filter(mode: str | None, width: int = 1080, height: int = 1920) -> s
     return None
 
 
+def blur_filter(boxes: list, label: str = "[0:v:0]") -> tuple[list[str], str]:
+    """ffmpeg filter steps that blur each box [(t, x, y, w, h)] (t relative to the clip start, x/y/w/h as
+    fractions of the picture) from t-1 s to t+1 s. Returns (steps, label of the result)."""
+    from .usage import BLUR_PAD_SECONDS
+
+    steps, cur = [], label
+    for i, (t, x, y, w, h) in enumerate(boxes):
+        a, b = max(0.0, t - BLUR_PAD_SECONDS), t + BLUR_PAD_SECONDS
+        steps.append(
+            f"{cur}split[bm{i}][bc{i}];"
+            f"[bc{i}]crop=trunc(iw*{w}/2)*2:trunc(ih*{h}/2)*2:trunc(iw*{x}/2)*2:trunc(ih*{y}/2)*2,"
+            f"boxblur=lr=min(w\\,h)/4:lp=4:cr=min(cw\\,ch)/4:cp=4[bb{i}];"
+            f"[bm{i}][bb{i}]overlay=trunc(W*{x}/2)*2:trunc(H*{y}/2)*2:enable='between(t,{a:.2f},{b:.2f})'[bo{i}]")
+        cur = f"[bo{i}]"
+    return steps, cur
+
+
 def cut_clip(src: Path, start: float, end: float, out: Path, reframe: str | None = None,
-             fps: int | None = None, audio: bool = True, width: int = 1080, height: int = 1920) -> tuple[bool, str]:
+             fps: int | None = None, audio: bool = True, width: int = 1080, height: int = 1920,
+             blur: list | None = None) -> tuple[bool, str]:
+    """Cut [start, end] of src. `blur`: [(t, x, y, w, h)] faces to blur, t in SOURCE seconds."""
     vf = reframe_filter(reframe, width, height)
     if fps:
         vf = f"{vf},fps={fps}" if vf else f"fps={fps}"
@@ -79,7 +99,12 @@ def cut_clip(src: Path, start: float, end: float, out: Path, reframe: str | None
 
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src),
            "-t", f"{end - start:.3f}"]
-    if vf and (";" in vf or "[" in vf):
+    rel = [(t - start, x, y, w, h) for t, x, y, w, h in (blur or []) if t - start < end - start + 1.5]
+    if rel:  # blur hidden faces on the original picture, before reframing
+        steps, cur = blur_filter(rel)
+        steps.append(f"{cur}{vf}[vout]" if vf else f"{cur}null[vout]")
+        cmd += ["-filter_complex", ";".join(steps), "-map", "[vout]"]
+    elif vf and (";" in vf or "[" in vf):
         cmd += ["-filter_complex", f"[0:v:0]{vf}[vout]", "-map", "[vout]"]
     else:
         cmd += ["-map", "0:v:0"] + (["-vf", vf] if vf else [])
@@ -94,7 +119,7 @@ def cut_clip(src: Path, start: float, end: float, out: Path, reframe: str | None
         return False, "timed out"
 
 
-def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES) -> dict:
+def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES, privacy: str | None = None) -> dict:
     """Moment row + the exact, privacy-safe range to use. Raises ValueError with a reason."""
     row = conn.execute(
         "SELECT mo.*, md.kind, md.duration AS media_duration, md.fps, md.width, md.height, md.orientation, "
@@ -112,11 +137,15 @@ def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES) -> dic
     duration = row["media_duration"] or row["end"]
     start = max(0.0, item.get("start", row["start"]))
     end = min(duration, item.get("end", row["end"])) if row["kind"] == "video" else 0.0
+    if row["kind"] == "photo" and photo_has_hidden_person(conn, row["media_id"], hidden["person"]):
+        raise ValueError("a hidden person is in this photo")
     if row["kind"] == "video":
         if end - start < 0.3:
             raise ValueError("range is empty")
         blocked = hidden_ranges(conn, row["media_id"], hidden["person"])
-        if blocked:
+        if blocked and (privacy or cfg.privacy_mode) == "blur":  # keep the range, blur their faces
+            around = (max(0.0, start - handles), min(duration, end + handles))
+        elif blocked:
             parts = safe_parts(start, end, blocked, min_len=0.5)
             if not parts:
                 raise ValueError("a hidden person is on screen for this whole range")
@@ -128,11 +157,13 @@ def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES) -> dic
             around = (max(0.0, start - handles), min(duration, end + handles))
     else:
         around = (0.0, 0.0)
-    return {"row": row, "src": src, "start": start, "end": end, "cut_start": around[0], "cut_end": around[1]}
+    blur = face_boxes(conn, row["media_id"], around[0], around[1], hidden["person"]) if row["kind"] == "video" else []
+    return {"row": row, "src": src, "start": start, "end": end, "cut_start": around[0], "cut_end": around[1],
+            "blur": blur}
 
 
 def pull(cfg: Config, conn, items: list, name: str, handles: float = HANDLES, reframe: str | None = None,
-         page: str | None = None, style: str | None = None, log=print) -> dict:
+         page: str | None = None, style: str | None = None, log=print, privacy: str | None = None) -> dict:
     items = [{"id": i} if isinstance(i, int) else i for i in items]
     out_dir = cfg.library_dir / "exports" / _slug(name)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +171,7 @@ def pull(cfg: Config, conn, items: list, name: str, handles: float = HANDLES, re
     for n, item in enumerate(items, 1):
         mid = item["id"]
         try:
-            r = resolve_item(cfg, conn, item, handles)
+            r = resolve_item(cfg, conn, item, handles, privacy)
         except ValueError as e:
             missing.append(f"m{mid}: {e}")
             continue
@@ -153,7 +184,8 @@ def pull(cfg: Config, conn, items: list, name: str, handles: float = HANDLES, re
         else:
             out = out_dir / f"{base}.mp4"
             ok, err = cut_clip(src, r["cut_start"], r["cut_end"], out,
-                               reframe if row["orientation"] != "vertical" or reframe == "crop" else None)
+                               reframe if row["orientation"] != "vertical" or reframe == "crop" else None,
+                               blur=r["blur"])
             if not ok:
                 missing.append(f"m{mid}: ffmpeg failed: {err}")
                 continue
@@ -173,7 +205,8 @@ def pull(cfg: Config, conn, items: list, name: str, handles: float = HANDLES, re
             "description": row["description"], "speech_en": row["speech_en"],
             "taken_at": row["taken_at"], "place": row["place"], "collection": row["collection"],
         })
-        log(f"[pull] {n}/{len(items)} m{mid} {fmt_ts(r['start'])}-{fmt_ts(r['end'])} -> {out.name}")
+        log(f"[pull] {n}/{len(items)} m{mid} {fmt_ts(r['start'])}-{fmt_ts(r['end'])} -> {out.name}"
+            + (" (hidden faces blurred)" if r.get("blur") else ""))
     (out_dir / "selects.json").write_text(json.dumps(selects, ensure_ascii=False, indent=2), encoding="utf-8")
     videos = [s for s in selects if s["kind"] == "video"]
     if videos:

@@ -191,6 +191,12 @@ crag search "sunset" --place Goa --exclude shaky --json
   the brain, exports or edits.
 - **People:** `crag faces` groups faces on your Mac; nothing is uploaded.
   - `crag people` lists the groups.
+  - Hidden people: `crag people hide "Richa (ex)" Rinki ...` (several at once). What happens to clips
+    they're in is set with `crag privacy cut|blur` (or Settings → Privacy, or `--privacy blur` for one
+    command): **cut** trims their moments out (default), **blur** keeps the clip and blurs their face.
+    Photos with a hidden person are always left out, and any hidden face still inside a clip that goes
+    into an edit or `crag pull` export is blurred (Premiere/AE then point at the blurred copy). Faces are
+    checked once a second, so always watch the preview before posting.
   - `crag people name 7 Riya` names a group. Groups with the same name are one person, but each
     group stays separate, so a wrongly named one can be renamed later (dashboard → People → open
     the person). `crag people split 7` separates a group that holds several people (e.g. one merged

@@ -57,6 +57,7 @@ class Config:
     scene_detect: bool = True
     workers: int = 4
     faces_enabled: bool = True
+    privacy_mode: str = "cut"  # clips with a hidden person: "cut" their moments out, or "blur" their faces
     embed_model: str = "BAAI/bge-m3"
     source: Path | None = field(default=None, repr=False)
 
@@ -154,30 +155,48 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         scene_detect=bool(p.get("scene_detect", Config.scene_detect)),
         workers=int(p.get("workers", Config.workers)),
         faces_enabled=bool(raw.get("faces", {}).get("enabled", Config.faces_enabled)),
+        privacy_mode=_privacy_mode(os.environ.get("CRAG_PRIVACY")
+                                   or raw.get("privacy", {}).get("hidden_people", Config.privacy_mode)),
         embed_model=e.get("model", Config.embed_model),
         source=path,
     )
 
 
-def set_backend(path: str | os.PathLike, backend: str) -> None:
-    """Switch [describe] backend in contentrag.toml, keeping the rest of the file (and comments) as is."""
+PRIVACY_MODES = {
+    "cut": "Cut out the moments they're in (the rest of the clip stays usable)",
+    "blur": "Keep the clip and blur their face",
+}
+
+
+def _privacy_mode(value: str) -> str:
+    if value not in PRIVACY_MODES:
+        raise SystemExit("[privacy] hidden_people must be 'cut' or 'blur'.")
+    return value
+
+
+def set_value(path: str | os.PathLike, section: str, key: str, value: str) -> None:
+    """Set `key = "value"` in [section] of contentrag.toml, keeping everything else (and comments) as is."""
     import re
 
-    if backend not in BACKENDS:
-        raise ValueError(f"backend must be one of: {', '.join(BACKENDS)}")
     path = Path(path)
     text = path.read_text(encoding="utf-8")
-    line = f'backend = "{backend}"'
-    m = re.search(r"^\[describe\][^\S\n]*$", text, flags=re.M)
+    line = f'{key} = "{value}"'
+    m = re.search(rf"^\[{re.escape(section)}\][^\S\n]*$", text, flags=re.M)
     if m is None:
-        text = text.rstrip("\n") + f"\n\n[describe]\n{line}\n"
+        text = text.rstrip("\n") + f"\n\n[{section}]\n{line}\n"
     else:
         nxt = re.search(r"^\[", text[m.end():], flags=re.M)
         end = m.end() + (nxt.start() if nxt else len(text) - m.end())
-        section = text[m.end():end]
-        if re.search(r"^[ \t]*backend[ \t]*=.*$", section, flags=re.M):
-            section = re.sub(r"^[ \t]*backend[ \t]*=.*$", line, section, count=1, flags=re.M)
-        else:
-            section = "\n" + line + section
-        text = text[:m.end()] + section + text[end:]
+        body = text[m.end():end]
+        pattern = rf"^[ \t]*{re.escape(key)}[ \t]*=.*$"
+        body = re.sub(pattern, line, body, count=1, flags=re.M) if re.search(pattern, body, flags=re.M) \
+            else "\n" + line + body
+        text = text[:m.end()] + body + text[end:]
     path.write_text(text, encoding="utf-8")
+
+
+def set_backend(path: str | os.PathLike, backend: str) -> None:
+    """Switch [describe] backend in contentrag.toml."""
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of: {', '.join(BACKENDS)}")
+    set_value(path, "describe", "backend", backend)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .config import Config
 from .db import jloads
-from .usage import collection_hidden, hidden_ranges, hidden_sets, safe_parts
+from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person, safe_parts
 from .util import fmt_ts
 
 EVENT_GAP_HOURS = 4
@@ -103,6 +103,8 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
             continue
         mo = dict(mo)
         mo["uses"] = use_counts.get(mo["id"], 0)
+        if hidden["person"] and m["kind"] == "photo" and photo_has_hidden_person(conn, m["id"], hidden["person"]):
+            continue
         if hidden["person"] and m["kind"] == "video":
             blocked = hidden_ranges(conn, mo["media_id"], hidden["person"])
             if blocked:

@@ -110,6 +110,44 @@ def hidden_ranges(conn, media_id: str, people: set[str] | None = None) -> list[t
     return merge_ranges([(max(0.0, r["t"] - FACE_PAD_SECONDS), r["t"] + FACE_PAD_SECONDS) for r in rows])
 
 
+BLUR_PAD_SECONDS = 1.0     # a face found at t is blurred from t-1 s to t+1 s (faces are checked once a second)
+BLUR_BOX_PAD = 0.45        # and the box is grown by this much on every side (heads move between checks)
+FACE_FRAME_LONG_SIDE = 640  # faces are found on frames scaled to this long side (prep + dense recheck)
+
+
+def face_boxes(conn, media_id: str, start: float, end: float, people: set[str] | None = None) -> list[tuple]:
+    """Where hidden people's faces are between start and end of a clip:
+    [(t, x, y, w, h)] with t in source seconds and x/y/w/h as fractions of the picture."""
+    people = hidden_sets(conn)["person"] if people is None else people
+    if not people:
+        return []
+    m = conn.execute("SELECT width, height FROM media WHERE id=?", (media_id,)).fetchone()
+    W, H = (m["width"] or 16, m["height"] or 9) if m else (16, 9)
+    fw, fh = (FACE_FRAME_LONG_SIDE, FACE_FRAME_LONG_SIDE * H / W) if W >= H else \
+        (FACE_FRAME_LONG_SIDE * W / H, FACE_FRAME_LONG_SIDE)
+    marks = ",".join("?" * len(people))
+    rows = conn.execute(
+        f"SELECT t, x, y, w, h FROM faces WHERE media_id=? AND person_id IN ({marks}) AND t BETWEEN ? AND ? "
+        "ORDER BY t", (media_id, *[int(p) for p in people], start - BLUR_PAD_SECONDS, end + BLUR_PAD_SECONDS)).fetchall()
+    out = []
+    for r in rows:
+        x, y, w, h = r["x"] / fw, r["y"] / fh, r["w"] / fw, r["h"] / fh
+        x0, y0 = max(0.0, x - w * BLUR_BOX_PAD), max(0.0, y - h * BLUR_BOX_PAD)
+        x1, y1 = min(1.0, x + w * (1 + BLUR_BOX_PAD)), min(1.0, y + h * (1 + BLUR_BOX_PAD))
+        if x1 > x0 and y1 > y0:
+            out.append((round(r["t"], 3), round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)))
+    return out
+
+
+def photo_has_hidden_person(conn, media_id: str, people: set[str] | None = None) -> bool:
+    people = hidden_sets(conn)["person"] if people is None else people
+    if not people:
+        return False
+    marks = ",".join("?" * len(people))
+    return conn.execute(f"SELECT 1 FROM faces WHERE media_id=? AND person_id IN ({marks}) LIMIT 1",
+                        (media_id, *[int(p) for p in people])).fetchone() is not None
+
+
 def merge_ranges(ranges: list[tuple[float, float]]) -> list[tuple[float, float]]:
     out: list[tuple[float, float]] = []
     for s, e in sorted(ranges):
