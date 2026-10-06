@@ -250,22 +250,45 @@ def sync_content_flags(cfg: Config, conn) -> int:
 _whisper_lock = threading.Lock()
 
 
+EMPTY_RECORDING = ("The recording came through empty. Check that the right microphone is picked (next to "
+                   "Speak), that the browser may use it, and speak for a few seconds before pressing Stop.")
+SILENT_RECORDING = ("I couldn't hear anything in that recording. Pick another microphone next to Speak (or check "
+                    "System Settings > Sound > Input), then try again.")
+SILENCE_DB = -45.0  # loudest moment quieter than this = the mic heard nothing
+# what Whisper writes when it gets silence or noise instead of speech
+PHANTOM = {"thank you", "thanks", "thank you very much", "thank you so much", "thanks for watching", "bye",
+           "you", "okay", "ok", "hmm", "uh", "the end", "subtitles by the amaraorg community", "धन्यवाद"}
+
+
+def _loudest(wav: Path) -> float | None:
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "info", "-i", str(wav), "-af", "volumedetect", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=120)
+    m = re.search(r"max_volume:\s*(-?[\d.]+|-inf) dB", r.stderr)
+    if not m:
+        return None
+    return float("-inf") if m.group(1) == "-inf" else float(m.group(1))
+
+
 def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str = "auto") -> str:
-    """Speech to text on this Mac. mode: auto | hi (Hindi script) | en | translate (to English)."""
+    """Speech to text on this Mac. mode: auto | hi (Hindi script) | en | translate (to English).
+    The recording stays in a temporary folder on this computer and is deleted right after."""
     try:
         import mlx_whisper  # type: ignore
     except ImportError:
         raise RuntimeError("Local Whisper isn't installed on this computer (pip install -e '.[mac]', Apple "
                            "Silicon). Meanwhile use macOS Dictation: click in the box and press Fn twice.")
-    tmp = cfg.library_dir / "tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=tmp) as d:
+    if len(audio) < 1500:
+        raise RuntimeError(EMPTY_RECORDING)
+    with tempfile.TemporaryDirectory(prefix="crag-voice-") as d:
         src, wav = Path(d) / f"voice{suffix}", Path(d) / "voice.wav"
         src.write_bytes(audio)
-        r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-ac", "1", "-ar", "16000",
+        r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
                             str(wav)], capture_output=True, text=True, timeout=300)
-        if r.returncode != 0:
-            raise RuntimeError(f"couldn't read the recording: {r.stderr.strip()[-200:]}")
+        if r.returncode != 0 or not wav.exists() or wav.stat().st_size < 3200:
+            raise RuntimeError(EMPTY_RECORDING)
+        loud = _loudest(wav)
+        if loud is not None and loud < SILENCE_DB:
+            raise RuntimeError(SILENT_RECORDING)
         kw = {"task": "translate"} if mode == "translate" else {}
         language = {"hi": "hi", "en": "en"}.get(mode)
         with _whisper_lock:  # one at a time: the model is big
@@ -273,4 +296,7 @@ def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str
                                          condition_on_previous_text=False, verbose=None, **kw)
     from .transcribe import keep_segment
 
-    return " ".join(s["text"].strip() for s in res.get("segments", []) if keep_segment(s)).strip()
+    text = " ".join(s["text"].strip() for s in res.get("segments", []) if keep_segment(s)).strip()
+    if re.sub(r"[^\w\s]", "", text.lower()).strip() in PHANTOM:
+        raise RuntimeError(SILENT_RECORDING)
+    return text

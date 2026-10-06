@@ -232,6 +232,8 @@ summary::-webkit-details-marker { display: none; }
 .mic { display: inline-flex; align-items: center; gap: 8px; }
 .mic.rec { background: var(--red-dot) !important; color: #fff !important; }
 .mic.rec::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+.mic .lvl { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.35); overflow: hidden; }
+.mic .lvl i { display: block; height: 100%; width: 0; background: #fff; transition: width .08s; }
 @keyframes blink { 50% { opacity: .2; } }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { height: 30px; padding: 0 12px; border-radius: 980px; border: 1px solid var(--separator); background: var(--surface);
@@ -559,6 +561,7 @@ function renderEvent() {
         <div class="tools"><button class="btn small mic" type="button" data-for="mStory">🎙 Speak</button>
           <select class="field" id="mLang" style="height:30px;font-size:13px;max-width:220px" aria-label="Voice language">
             <option value="auto">Voice: automatic</option><option value="hi">Hindi (देवनागरी)</option><option value="en">English</option><option value="translate">Hindi → English text</option></select>
+          <select class="field" id="mMic" style="height:30px;font-size:13px;max-width:240px" aria-label="Microphone"><option value="">Microphone: default</option></select>
           <span class="muted" style="font-size:12px">Transcribed privately on this Mac. macOS Dictation (press Fn twice) works too.</span></div></div>
       <div><label for="mMeaning">What did it mean to you? <span class="hint">One or two lines. How you felt, what it changed.</span></label>
         <textarea id="mMeaning" style="min-height:70px" placeholder="e.g. First time I felt free in a new city">${esc(v.meaning)}</textarea>
@@ -605,6 +608,8 @@ function renderEvent() {
   $("memMain").querySelectorAll(".mic").forEach(b => b.onclick = () => toggleMic(b));
   try { $("mLang").value = mstore.get("mem.lang") || "auto"; } catch (x) {}
   $("mLang").onchange = () => mstore.set("mem.lang", $("mLang").value);
+  fillMics();
+  $("mMic").onchange = () => mstore.set("mem.mic", $("mMic").value);
 }
 const STARTXT = ["", "Just a day", "Nice memory", "Meaningful", "Big moment", "Changed my life"];
 function setStarTxt(n) { if ($("mStarTxt")) $("mStarTxt").textContent = STARTXT[n] || ""; }
@@ -652,22 +657,49 @@ async function saveMemory(opts) {
   toast("Saved to your Life Vault");
   openEvent(MEM.idx + 1 < MEM.events.length ? MEM.idx + 1 : MEM.idx);  // the last one: stay and show it saved
 }
+async function fillMics() {
+  const sel = $("mMic"); if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const mics = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput" && d.deviceId !== "default");
+    const want = mstore.get("mem.mic") || "";
+    sel.innerHTML = `<option value="">Microphone: default</option>` + mics.map((d, k) =>
+      `<option value="${esc(d.deviceId)}"${d.deviceId === want ? " selected" : ""}>${esc(d.label || "Microphone " + (k + 1))}</option>`).join("");
+  } catch (e) {}
+}
 async function toggleMic(btn) {
-  if (MEM.rec) { MEM.rec.stop(); return; }
+  if (MEM.rec) { if (Date.now() - MEM.rec.t0 > 700) MEM.rec.stop(); return; }
   if (!navigator.mediaDevices || !window.MediaRecorder) { toast("This browser can't record. Use macOS Dictation (Fn twice)."); return; }
+  const dev = $("mMic") ? $("mMic").value : "";
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
-  catch (e) { toast("Microphone not allowed. Allow it for this page, or use macOS Dictation (Fn twice)."); return; }
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: dev ? {deviceId: {exact: dev}} : true}); }
+  catch (e) { toast("Microphone not available. Allow it for this page (lock icon in the address bar), pick another mic, or use macOS Dictation (Fn twice)."); return; }
+  fillMics();  // names appear once the browser may use the microphone
   const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find(t => MediaRecorder.isTypeSupported(t)) || "";
-  const rec = new MediaRecorder(stream, type ? {mimeType: type} : {}), chunks = [], t0 = Date.now();
-  MEM.rec = rec; btn.classList.add("rec");
-  const tick = setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); btn.textContent = ` Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
-  btn.textContent = " Stop 0:00";
+  const rec = new MediaRecorder(stream, type ? {mimeType: type} : {}), chunks = [];
+  rec.t0 = Date.now(); MEM.rec = rec; btn.classList.add("rec");
+  // live level, so you can see the mic actually hears you
+  let ctx, peak = 0, raf;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    const draw = () => { an.getByteTimeDomainData(buf); let m = 0; for (const v of buf) m = Math.max(m, Math.abs(v - 128));
+      peak = Math.max(peak, m); const bar = btn.querySelector(".lvl i"); if (bar) bar.style.width = Math.min(100, m * 1.6) + "%";
+      raf = requestAnimationFrame(draw); };
+    draw();
+  } catch (e) {}
+  const label = () => { const s = Math.round((Date.now() - rec.t0) / 1000);
+    btn.innerHTML = ` Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} <span class="lvl"><i></i></span>`; };
+  label(); const tick = setInterval(label, 1000);
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   rec.onstop = async () => {
-    clearInterval(tick); stream.getTracks().forEach(t => t.stop()); MEM.rec = null;
+    clearInterval(tick); cancelAnimationFrame(raf); if (ctx) ctx.close().catch(() => {});
+    stream.getTracks().forEach(t => t.stop()); MEM.rec = null;
     btn.classList.remove("rec"); btn.textContent = "Transcribing…"; btn.disabled = true;
     const blob = new Blob(chunks, {type: (rec.mimeType || type || "audio/webm").split(";")[0]});
+    const done = () => { btn.disabled = false; btn.textContent = "🎙 Speak"; };
+    if (blob.size < 1500) { toast("The recording came through empty. Pick the right microphone next to Speak and talk for a few seconds."); return done(); }
+    if (ctx && peak < 3) { toast("The microphone didn't pick up any sound. Pick another one next to Speak, or check System Settings › Sound › Input."); return done(); }
     try {
       const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "auto")}`,
         {method: "POST", headers: {"Content-Type": blob.type, "X-Crag": "1"}, body: blob});
@@ -675,9 +707,9 @@ async function toggleMic(btn) {
       if (j.text) { const ta = $(btn.dataset.for); ta.value = (ta.value.trim() ? ta.value.trim() + "\n\n" : "") + j.text; MEM.dirty = true; saveDraft(); }
       else toast(j.error || "Didn't catch anything, try again");
     } catch (e) { toast("Transcription failed: " + e); }
-    btn.disabled = false; btn.textContent = "🎙 Speak";
+    done();
   };
-  rec.start();
+  rec.start(1000);  // a chunk every second: nothing is lost if the recording ends abruptly
 }
 document.addEventListener("keydown", (e) => {
   if ($("memMain") && document.querySelector('[data-page="memories"]').hidden) return;

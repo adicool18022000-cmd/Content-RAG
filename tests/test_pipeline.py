@@ -1389,5 +1389,16 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
                    check=True)
     assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "translate") == "Goa wali trip"
     assert seen["task"] == "translate" and seen["language"] is None and seen["path"].endswith(".wav")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="empty"):
         memories.transcribe_audio(cfg, b"not audio", ".webm")
+    with pytest.raises(RuntimeError, match="empty"):  # cut off mid-file (what the screenshot showed)
+        memories.transcribe_audio(cfg, rec.read_bytes()[:1600], ".webm")
+    quiet = tmp_path / "quiet.webm"  # wrong microphone: silence
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "3",
+                    "-c:a", "libopus", str(quiet)], check=True)
+    with pytest.raises(RuntimeError, match="couldn't hear"):
+        memories.transcribe_audio(cfg, quiet.read_bytes(), ".webm")
+    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(
+        transcribe=lambda path, **kw: {"segments": [{"text": " Thank you."}]}))
+    with pytest.raises(RuntimeError, match="couldn't hear"):  # Whisper's phantom line on noise
+        memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
