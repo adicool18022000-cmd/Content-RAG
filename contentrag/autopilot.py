@@ -92,6 +92,9 @@ class Busy(RuntimeError):
 @contextmanager
 def pipeline_lock(cfg: Config):
     """Exclusive per-library lock. Released automatically if the process dies."""
+    from .db import require_drive
+
+    require_drive(cfg.library_dir / "index.sqlite")
     cfg.library_dir.mkdir(parents=True, exist_ok=True)
     f = open(cfg.library_dir / ".crag.lock", "w")
     locked = True

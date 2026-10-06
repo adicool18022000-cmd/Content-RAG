@@ -19,7 +19,7 @@ from pathlib import Path
 from .config import Config
 from .db import jloads
 from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person
-from .vault import _city, _q, _slug, _yaml_list, cluster_events, read_memories
+from .vault import _city, _q, _slug, _yaml_list, cluster_events, event_memory, read_memories
 
 MANAGED = ("What it meant", "What happened", "Content angle")
 FEELINGS = ("happy", "proud", "free", "grateful", "excited", "nervous", "lost", "sad", "angry", "nostalgic",
@@ -57,12 +57,13 @@ def list_events(cfg: Config, conn) -> dict:
     memories = read_memories(cfg.vault_dir)
     out = []
     for ev in _events(cfg, conn):
-        mem = next((memories[m["id"]] for m in ev if m["id"] in memories), None)
+        mem = event_memory(ev, memories)
         out.append({"id": ev[0]["id"], "date": ev[0]["taken_at"][:10], "time": ev[0]["taken_at"][11:16],
                     "end": ev[-1]["taken_at"][:16].replace("T", " "), "place": _city(_place(ev)) or "",
                     "title": _headline(ev), "items": len(ev),
                     "videos": sum(1 for m in ev if m["kind"] == "video"),
-                    "done": bool(mem), "importance": mem["importance"] if mem else 0})
+                    "done": bool(mem), "importance": mem["importance"] if mem else 0,
+                    "content": mem["content"] if mem else True})
     return {"events": out, "done": sum(1 for e in out if e["done"]), "feelings": FEELINGS}
 
 
@@ -127,26 +128,50 @@ def _sections(text: str) -> tuple[dict, list[tuple[str, str]], str]:
     return fm, [(parts[i].strip(), parts[i + 1].strip()) for i in range(1, len(parts) - 1, 2)], title
 
 
-def _memory_path(cfg: Config, ev: list) -> Path | None:
+def _memory_paths(cfg: Config, ev: list) -> list[Path]:
+    """Every memory note of this event, oldest first (older notes may come from finer-split events)."""
     memories = read_memories(cfg.vault_dir)
-    mem = next((memories[m["id"]] for m in ev if m["id"] in memories), None)
-    return cfg.vault_dir / f"{mem['name']}.md" if mem else None
+    names = []
+    for m in ev:
+        mem = memories.get(m["id"])
+        if mem and mem["name"] not in names:
+            names.append(mem["name"])
+    return [p for p in (cfg.vault_dir / f"{n}.md" for n in names) if p.exists()]
 
 
-def load_memory(cfg: Config, ev: list) -> dict | None:
-    path = _memory_path(cfg, ev)
-    if path is None or not path.exists():
-        return None
-    fm, sections, _ = _sections(path.read_text(encoding="utf-8", errors="ignore"))
+def _read(path: Path) -> dict:
+    fm, sections, title = _sections(path.read_text(encoding="utf-8", errors="ignore"))
     sec = dict(sections)
     people = [p.strip().strip('"').strip("'") for p in fm.get("people", "").strip("[]").split(",") if p.strip()]
     try:
         importance = int(fm.get("importance") or 0)
     except ValueError:
         importance = 0
-    return {"note": path.relative_to(cfg.vault_dir).as_posix(), "meaning": sec.get("What it meant", ""),
-            "story": sec.get("What happened", ""), "angle": sec.get("Content angle", ""),
-            "feeling": fm.get("feeling", ""), "importance": importance, "people": people, "era": fm.get("era", "")}
+    told = lambda x: "" if x.strip() == "(not told yet)" else x.strip()  # noqa: E731
+    return {"meaning": told(sec.get("What it meant", "")), "story": told(sec.get("What happened", "")),
+            "angle": sec.get("Content angle", ""), "feeling": fm.get("feeling", ""), "importance": importance,
+            "people": people, "era": fm.get("era", ""), "date": fm.get("date", ""),
+            "content": (fm.get("content") or "yes").lower() not in ("no", "false"),
+            "extra": [(h, b) for h, b in sections if h not in MANAGED], "title": title}
+
+
+def load_memory(cfg: Config, ev: list) -> dict | None:
+    """The event's memory; several older notes for one event are shown together (saved as one)."""
+    paths = _memory_paths(cfg, ev)
+    if not paths:
+        return None
+    notes = [_read(p) for p in paths]
+    join = lambda key: "\n\n".join(n[key] for n in notes if n[key].strip())  # noqa: E731
+    feelings = []
+    for n in notes:
+        feelings += [f.strip() for f in n["feeling"].split(",") if f.strip() and f.strip() not in feelings]
+    people = []
+    for n in notes:
+        people += [x for x in n["people"] if x not in people]
+    return {"note": paths[0].relative_to(cfg.vault_dir).as_posix(), "merged": len(paths),
+            "meaning": join("meaning"), "story": join("story"), "angle": join("angle"),
+            "feeling": ", ".join(feelings), "importance": max(n["importance"] for n in notes), "people": people,
+            "era": next((n["era"] for n in notes if n["era"]), ""), "content": any(n["content"] for n in notes)}
 
 
 def eras(cfg: Config) -> list[str]:
@@ -160,13 +185,14 @@ def save_memory(cfg: Config, conn, event_id: str, data: dict) -> dict:
     ev = _find(cfg, conn, event_id)
     if ev is None:
         raise ValueError("unknown event")
-    path = _memory_path(cfg, ev)
+    paths = _memory_paths(cfg, ev)
     keep: list[tuple[str, str]] = []
     title = f"{ev[0]['taken_at'][:10]} · {_city(_place(ev)) or 'Unknown place'} · {_headline(ev)}"
-    if path is not None and path.exists():
-        _, sections, old_title = _sections(path.read_text(encoding="utf-8", errors="ignore"))
-        keep = [(h, b) for h, b in sections if h not in MANAGED]
-        title = old_title or title
+    if paths:
+        notes = [_read(p) for p in paths]
+        keep = [x for n in notes for x in n["extra"]]
+        title = notes[0]["title"] or title
+        path = paths[0]
     else:
         name = _slug(f"{ev[0]['taken_at'][:10]} {_city(_place(ev)) or ''} {_headline(ev)}", 80)
         path = cfg.vault_dir / "Memories" / ev[0]["taken_at"][:4] / f"{name}.md"
@@ -183,6 +209,7 @@ def save_memory(cfg: Config, conn, event_id: str, data: dict) -> dict:
     lines = ["---", "type: memory", f"event_id: {ev[0]['id']}", f"date: {ev[0]['taken_at'][:10]}",
              f"era: {_q(clean(data.get('era')))}", f"people: {_yaml_list(people)}",
              f"feeling: {_q(clean(data.get('feeling')))}", f"importance: {importance or ''}",
+             f"content: {'no' if data.get('content') is False else 'yes'}",
              "source: memories tab", "---", f"# {title}", "",
              "## What it meant", clean(data.get("meaning")) or "(not told yet)", "",
              "## What happened", clean(data.get("story")) or "(not told yet)", ""]
@@ -192,7 +219,30 @@ def save_memory(cfg: Config, conn, event_id: str, data: dict) -> dict:
         lines += [f"## {h}", b, ""]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
-    return {"ok": True, "note": path.relative_to(cfg.vault_dir).as_posix()}
+    for old in paths[1:]:  # their text is now in this note; the old files are kept aside, never deleted
+        dest = cfg.vault_dir / "Memories" / "_merged" / old.relative_to(cfg.vault_dir / "Memories")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        old.replace(dest)
+    sync_content_flags(cfg, conn)
+    return {"ok": True, "note": path.relative_to(cfg.vault_dir).as_posix(), "merged": len(paths[1:])}
+
+
+def sync_content_flags(cfg: Config, conn) -> int:
+    """Clips of events whose memory says `content: no` are never suggested for videos (table content_off).
+    Rebuilt from the memory notes, so editing a note (by hand or by Claude) is enough."""
+    from .vault import event_memory
+
+    memories = read_memories(cfg.vault_dir)
+    off = []
+    if any(not m["content"] for m in memories.values()):
+        for ev in _events(cfg, conn):
+            mem = event_memory(ev, memories)
+            if mem and not mem["content"]:
+                off += [(m["id"], mem["name"]) for m in ev]
+    conn.execute("DELETE FROM content_off")
+    conn.executemany("INSERT OR REPLACE INTO content_off VALUES (?, ?)", off)
+    conn.commit()
+    return len(off)
 
 
 # ---------------------------------------------------------------- voice

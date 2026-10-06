@@ -200,6 +200,7 @@ summary::-webkit-details-marker { display: none; }
 .mem-ev .s { font-size: 12px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mem-ev .tick { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; border: 1.5px solid var(--tertiary); }
 .mem-ev.done .tick { background: var(--green-dot); border-color: var(--green-dot); }
+.mem-ev.done.off .tick { background: var(--tertiary); border-color: var(--tertiary); }
 .mem-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .mem-head h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.02em; }
 .mem-head .sub { color: var(--secondary); margin-top: 4px; }
@@ -510,8 +511,8 @@ function renderMemList() {
     if ((show === "todo" && e.done) || (show === "done" && !e.done)) return;
     const m = e.date.slice(0, 7);
     if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
-    html += `<button class="mem-ev${e.done ? " done" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
-      <span class="tick" title="${e.done ? "Told" : "Not told yet"}"></span>
+    html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
+      <span class="tick" title="${e.done ? (e.content === false ? "Not for content" : "Told") : "Not told yet"}"></span>
       <span style="min-width:0"><div class="t">${esc(e.date.slice(8))} · ${esc(e.place || e.title)}</div>
       <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}</div></span></button>`;
   });
@@ -539,11 +540,11 @@ async function openEvent(i) {
 function renderEvent() {
   const ev = MEM.ev, e = MEM.events[MEM.idx], m = ev.memory || {};
   let draft = null; try { draft = JSON.parse(mstore.get("mem.draft." + ev.id) || "null"); } catch (x) {}
-  const v = Object.assign({meaning: "", story: "", angle: "", feeling: "", importance: 0, people: [], era: ""}, m, draft || {});
+  const v = Object.assign({meaning: "", story: "", angle: "", feeling: "", importance: 0, people: [], era: "", content: true}, m, draft || {});
   const timeRange = ev.time + (ev.end.slice(0, 10) === ev.date ? "–" + ev.end.slice(11) : " → " + ev.end);
   $("memMain").innerHTML = `
     <div class="mem-head"><div style="min-width:0">
-        <div class="muted" style="font-size:13px">Event ${MEM.idx + 1} of ${MEM.events.length}${m.note ? ' · <span class="badge green">Told</span>' : ""}${draft ? ' · <span class="badge blue">Unsaved draft</span>' : ""}</div>
+        <div class="muted" style="font-size:13px">Event ${MEM.idx + 1} of ${MEM.events.length}${m.note ? (m.content === false ? ' · <span class="badge">Not for content</span>' : ' · <span class="badge green">Told</span>') : ""}${draft ? ' · <span class="badge blue">Unsaved draft</span>' : ""}</div>
         <h1>${esc(fmtDate(ev.date))}</h1>
         <div class="sub">${esc(timeRange)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length} photo${ev.items.length === 1 ? "" : "s"}/video${ev.items.length === 1 ? "" : "s"}</div></div>
       <div class="row-actions"><button class="btn" type="button" id="mPrev">‹ Earlier</button><button class="btn" type="button" id="mNext">Later ›</button></div></div>
@@ -551,6 +552,7 @@ function renderEvent() {
       `<button type="button" data-k="${k}" aria-current="${k === 0}" title="${esc(it.time + " " + (it.title || ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
       <div class="caption" id="mCaption"></div>` : `<div class="notice">All items of this event include people you've hidden.</div>`}
     ${ev.held_back ? `<div class="muted" style="font-size:13px">${ev.held_back} item${ev.held_back === 1 ? "" : "s"} with people you've hidden ${MEM.hidden ? "are shown" : "are left out"}. <a href="#" id="mHidden">${MEM.hidden ? "Hide them" : "Show them anyway"}</a></div>` : ""}
+    ${m.merged > 1 ? `<div class="notice">You told this day in ${m.merged} parts before (events used to be split finer). They're shown together below; saving combines them into one memory.</div>` : ""}
     <div class="card ask stack" style="gap:18px">
       <div><label for="mStory">What was happening? <span class="hint">Where were you, who was there, why, what happened before and after.</span></label>
         <textarea id="mStory" placeholder="Tell it like you'd tell a friend…">${esc(v.story)}</textarea>
@@ -572,10 +574,13 @@ function renderEvent() {
         <div><label for="mEra">Chapter of your life</label><input class="field" id="mEra" style="width:100%" list="mEras" value="${esc(v.era)}" placeholder="e.g. College, First job in Bangalore">
           <datalist id="mEras">${ev.eras.map(x => `<option value="${esc(x)}">`).join("")}</datalist></div>
       </div>
+      <label class="check" style="font-weight:400"><input type="checkbox" id="mContent" ${v.content === false ? "" : "checked"}>
+        Use this in my videos <span class="hint">(untick for private or unimportant moments: their clips are never suggested)</span></label>
       <div><label for="mAngle">Could this be a reel? <span class="hint">Optional</span></label>
         <input class="field" id="mAngle" style="width:100%" value="${esc(v.angle)}" placeholder="e.g. 'The night I almost quit' — story to camera with this footage"></div>
       <div class="mem-actions"><span class="muted" id="mSaved" style="font-size:13px">${m.note ? "Saved in " + esc(m.note) : "Not saved yet"}</span>
-        <div class="row-actions"><span class="muted" style="font-size:12px">⌘↵ saves</span><button class="btn plain" type="button" id="mSkip">Skip</button>
+        <div class="row-actions"><span class="muted" style="font-size:12px">⌘↵ saves</span><button class="btn plain" type="button" id="mSkip" title="Decide later">Skip</button>
+          <button class="btn" type="button" id="mUnimportant" title="Saved as told, never used in content">Not important</button>
           <button class="btn primary" type="button" id="mSave">Save &amp; next ›</button></div></div>
     </div>`;
   if (ev.items.length) showItem(0);
@@ -583,7 +588,8 @@ function renderEvent() {
   $("mPrev").onclick = () => openEvent(MEM.idx - 1);
   $("mNext").onclick = () => openEvent(MEM.idx + 1);
   $("mSkip").onclick = () => { mstore.set("mem.draft." + ev.id, null); MEM.dirty = false; openEvent(MEM.idx + 1); };
-  $("mSave").onclick = saveMemory;
+  $("mSave").onclick = () => saveMemory();
+  $("mUnimportant").onclick = () => saveMemory({content: false, unimportant: true});
   if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !MEM.hidden; openEvent(MEM.idx); };
   if ($("mStrip")) $("mStrip").onclick = (x) => { const b = x.target.closest("button"); if (b) showItem(+b.dataset.k); };
   $("mFeel").onclick = (x) => { const c = x.target.closest(".chip"); if (c) { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); MEM.dirty = true; } };
@@ -595,6 +601,7 @@ function renderEvent() {
     if (!cur.includes(b.dataset.person)) cur.push(b.dataset.person);
     $("mPeople").value = cur.join(", "); MEM.dirty = true; });
   $("memMain").querySelectorAll("textarea, input").forEach(el => el.addEventListener("input", () => { MEM.dirty = true; }));
+  $("mContent").onchange = () => { MEM.dirty = true; };
   $("memMain").querySelectorAll(".mic").forEach(b => b.onclick = () => toggleMic(b));
   try { $("mLang").value = mstore.get("mem.lang") || "auto"; } catch (x) {}
   $("mLang").onchange = () => mstore.set("mem.lang", $("mLang").value);
@@ -626,21 +633,22 @@ function formData() {
   return {id: MEM.ev.id, story: $("mStory").value, meaning: $("mMeaning").value, angle: $("mAngle").value,
     era: $("mEra").value.trim(), people: $("mPeople").value.split(",").map(x => x.trim()).filter(Boolean),
     feeling: [...$("mFeel").querySelectorAll('[aria-pressed="true"]')].map(c => c.textContent).join(", "),
-    importance: $("mStars").querySelectorAll("button.on").length};
+    importance: $("mStars").querySelectorAll("button.on").length, content: $("mContent").checked};
 }
 function saveDraft() {
   if (!MEM.ev || !MEM.dirty || !$("mStory")) return;
   mstore.set("mem.draft." + MEM.ev.id, JSON.stringify(formData()));
 }
-async function saveMemory() {
-  const d = formData();
-  if (!d.story.trim() && !d.meaning.trim()) { toast("Tell a bit of the story first, or press Skip"); return; }
+async function saveMemory(opts) {
+  const d = Object.assign(formData(), opts && {content: false});
+  if (opts && opts.unimportant) { if (!d.meaning.trim()) d.meaning = "Not important."; if (!d.importance) d.importance = 1; }
+  if (!d.story.trim() && !d.meaning.trim()) { toast("Tell a bit of the story first, or press Skip / Not important"); return; }
   $("mSave").disabled = true;
   const j = await (await post("/api/memories/save", d)).json();
   $("mSave").disabled = false;
   if (!j.ok) { toast(j.error || "Couldn't save"); return; }
   mstore.set("mem.draft." + MEM.ev.id, null); MEM.dirty = false;
-  const e = MEM.events[MEM.idx]; e.done = true; e.importance = d.importance;
+  const e = MEM.events[MEM.idx]; e.done = true; e.importance = d.importance; e.content = d.content;
   toast("Saved to your Life Vault");
   openEvent(MEM.idx + 1 < MEM.events.length ? MEM.idx + 1 : MEM.idx);  // the last one: stay and show it saved
 }

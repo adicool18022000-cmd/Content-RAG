@@ -145,7 +145,11 @@ def search(cfg: Config, conn, query: str = "", filters: Filters | None = None, l
     hidden = hidden_sets(conn) if not filters.include_hidden else {k: set() for k in ("moment", "media",
                                                                                     "collection", "person")}
     ranges_cache: dict[str, list] = {}
+    # clips of memories the creator marked "not for content"
+    off = set() if filters.include_hidden else {x[0] for x in conn.execute("SELECT media_id FROM content_off")}
     for r in rows:
+        if r["media_id"] in off:
+            continue
         if str(r["id"]) in hidden["moment"] or r["media_id"] in hidden["media"] \
                 or collection_hidden(r["collection"], hidden["collection"]):
             continue

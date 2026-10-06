@@ -42,7 +42,7 @@ Every moment appears as one line:
 | `_generated/Broll/` | generated | One note per purpose-shot brand clip. |
 | `Me.md` | Claude + creator | Who they are now, what they build, content pillars. Read first. |
 | `Eras/` | Claude + creator | Chapters of life (e.g. College Y1, Moving to Bangalore). The story layer. |
-| `Memories/` | Claude + creator | One note per event that mattered: `event_id` (from the event note's properties), `era`, `people`, `feeling`, `importance` (1–5), `## What it meant` (their words), what happened, content angle. Template: `Memories/_Memory template.md`. |
+| `Memories/` | Claude + creator | One note per event (one day, or one trip) that mattered: `event_id` (from the event note's properties), `era`, `people`, `feeling`, `importance` (1–5), `content: yes/no` (`no` = private / not important: its clips are never suggested), `## What it meant` (their words), what happened, content angle. Template: `Memories/_Memory template.md`. `_merged/` holds older notes combined into one. |
 | `People/`, `Places/` | Claude + creator | Recurring people and places, linked from eras and stories. |
 | `Stories/` | Claude + creator | Content-ready stories: what happened, why it matters, footage, hooks. |
 | `Interviews/` | Claude | Raw Q&A from interview sessions, dated. Source of truth for facts not visible in footage. |

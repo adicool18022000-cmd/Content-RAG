@@ -1330,6 +1330,46 @@ def test_memory_lane(env, monkeypatch):
     with pytest.raises(ValueError):
         memories.save_memory(cfg, conn, "nope", {})
 
+    # older notes written when events were split finer: shown together, combined into one on save
+    extra = cfg.vault_dir / "Memories" / "2023" / "older part.md"
+    second = next(i for i in memories.event_detail(cfg, conn, goa["id"])["items"] if i["id"] != goa["id"])["id"]
+    extra.write_text(f"---\ntype: memory\nevent_id: {second}\ndate: 2023-08-12\nimportance: 2\n---\n# x\n\n"
+                     "## What it meant\nSunset was unreal.\n\n## What happened\nWe stopped at the beach.\n")
+    both = memories.event_detail(cfg, conn, goa["id"])["memory"]
+    assert both["merged"] == 2 and "Sunset was unreal." in both["meaning"] and both["importance"] == 4
+    out = memories.save_memory(cfg, conn, goa["id"], {"story": both["story"], "meaning": both["meaning"],
+                                                      "importance": 4, "content": False})
+    assert out["merged"] == 1 and not extra.exists()
+    assert (cfg.vault_dir / "Memories" / "_merged" / "2023" / "older part.md").exists()  # kept aside, not deleted
+    assert "We stopped at the beach." in (cfg.vault_dir / out["note"]).read_text()
+    # content: no -> its clips are never suggested, but stay in the life story
+    assert conn.execute("SELECT count(*) FROM content_off").fetchone()[0] >= 2
+    assert not any(r["media_id"] in (goa["id"], second) for r in search(cfg, conn, "", Filters(), use_vectors=False))
+    assert next(e for e in memories.list_events(cfg, conn)["events"] if e["id"] == goa["id"])["content"] is False
+    build_vault(cfg, conn, log=lambda *_: None)
+    note = next(e for e in (cfg.vault_dir / "_generated" / "Events").rglob("*.md") if goa["id"] in e.read_text())
+    assert "Not for content" in note.read_text() and "content: no" in note.read_text()
+    memories.save_memory(cfg, conn, goa["id"], {"meaning": "ok to use now", "content": True})
+    assert conn.execute("SELECT count(*) FROM content_off").fetchone()[0] == 0
+
+
+def test_events_per_day_and_trip():
+    from contentrag.vault import cluster_events
+
+    n = iter(range(1000))
+
+    def m(t, place=None, coll=None):
+        return {"id": str(next(n)), "taken_at": t, "place": place, "collection": coll}
+
+    home = [m(f"2023-{mo:02d}-05T10:00", "Patna, Bihar") for mo in (1, 2, 3, 4)]
+    day = [m("2023-05-01T09:00", "Patna, Bihar"), m("2023-05-01T15:00"), m("2023-05-02T01:30")]  # one day (till 4 am)
+    trip = [m("2023-06-10T10:00", "Goa, India"), m("2023-06-11T12:00"), m("2023-06-12T18:00", "Goa, India"),
+            m("2023-06-14T09:00", "Goa, India")]  # a no-GPS day inside the trip, then a day off
+    folder = [m("2023-07-01T10:00", None, "Rishikesh 2023"), m("2023-07-02T10:00", None, "Rishikesh 2023")]
+    after = [m("2023-07-03T10:00", "Patna, Bihar"), m("2023-07-04T10:00", "Patna, Bihar")]  # home: one per day
+    evs = cluster_events(home + day + trip + folder + after)
+    assert [len(e) for e in evs] == [1, 1, 1, 1, 3, 4, 2, 1, 1]
+
 
 def test_voice_transcription(env, monkeypatch, tmp_path):
     import sys

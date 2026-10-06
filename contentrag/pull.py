@@ -124,6 +124,9 @@ def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES) -> dic
     if str(row["id"]) in hidden["moment"] or row["media_id"] in hidden["media"] \
             or collection_hidden(row["collection"], hidden["collection"]):
         raise ValueError("this clip is on the hide list")
+    off = conn.execute("SELECT memory FROM content_off WHERE media_id=?", (row["media_id"],)).fetchone()
+    if off:
+        raise ValueError(f"you marked this memory as not for content ({off['memory']})")
     src = source_path(cfg, conn, row["media_id"])
     if src is None:
         raise ValueError("drive with this file is not plugged in")

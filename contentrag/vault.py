@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Config
@@ -18,7 +18,6 @@ from .db import jloads
 from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person, safe_parts
 from .util import fmt_ts
 
-EVENT_GAP_HOURS = 4
 
 
 def _slug(text: str, n: int = 60) -> str:
@@ -37,24 +36,70 @@ def _city(place: str | None) -> str | None:
     return place.split(",")[0].strip() if place else None
 
 
+DAY_STARTS_AT = 4        # a night out until 3 am still belongs to the day it started
+TRIP_GAP_DAYS = 2        # days without footage that still count as the same trip
+TRIP_MAX_DAYS = 21       # a trip (or a short folder) never spans more than this
+HOME_MONTHS = 3          # a city with footage in this many different months is home, not a trip
+
+
+def _day(m) -> str:
+    dt = _dt(m["taken_at"])
+    return (dt - timedelta(hours=DAY_STARTS_AT)).date().isoformat() if dt else (m["taken_at"] or "")[:10]
+
+
 def cluster_events(media: list) -> list[list]:
-    """Group media into events: split when there is a gap of more than a few hours
-    or the (known) city changes."""
-    events: list[list] = []
-    last_dt, last_city = None, None
+    """Group media (sorted by time) into events the way you'd remember them:
+    one event per day, and one per trip: consecutive days in the same city away from home, or in
+    the same short folder (a folder whose footage spans at most TRIP_MAX_DAYS, e.g. "Goa 2023")."""
+    if not media:
+        return []
+    months_by_city: dict[str, set] = {}
+    span: dict[str, list] = {}
     for m in media:
-        dt, city = _dt(m["taken_at"]), _city(m["place"])
-        new = (
-            not events
-            or dt is None or last_dt is None
-            or (dt - last_dt).total_seconds() > EVENT_GAP_HOURS * 3600
-            or (city and last_city and city != last_city)
-        )
-        if new:
-            events.append([])
-        events[-1].append(m)
-        last_dt = dt or last_dt
-        last_city = city or last_city
+        c = _city(m["place"])
+        if c:
+            months_by_city.setdefault(c, set()).add((m["taken_at"] or "")[:7])
+        if m["collection"]:
+            span.setdefault(m["collection"], []).append(m["taken_at"])
+    home = {c for c, months in months_by_city.items() if len(months) >= HOME_MONTHS}
+    short = {c for c, ts in span.items()
+             if (lambda a, b: a and b and (b - a).days <= TRIP_MAX_DAYS)(_dt(min(ts)), _dt(max(ts)))}
+
+    days: list[list] = []
+    for m in media:
+        if days and _day(days[-1][-1]) == _day(m):
+            days[-1].append(m)
+        else:
+            days.append([m])
+
+    def info(ms):
+        cities = Counter(_city(m["place"]) for m in ms if m["place"])
+        top = cities.most_common(1)[0][0] if cities else None
+        return {"away": top if top and top not in home else None, "known": bool(top),
+                "folders": {m["collection"] for m in ms if m["collection"] in short}}
+
+    def days_between(a, b) -> int:
+        return (_dt(_day(b[0]) + "T00:00") - _dt(_day(a[-1]) + "T00:00")).days
+
+    infos = [info(ms) for ms in days]
+    events: list[list] = []
+    cur, cur_info, first_day = None, None, None
+    for k, ms in enumerate(days):
+        i = infos[k]
+        if cur is not None:
+            gap = days_between(cur, ms)
+            length = (_dt(_day(ms[0]) + "T00:00") - _dt(first_day + "T00:00")).days
+            same_trip = (i["away"] and i["away"] == cur_info["away"]) or (i["folders"] & cur_info["folders"])
+            if not same_trip and not i["known"] and cur_info["away"] and k + 1 < len(days):
+                # a day without GPS (WhatsApp, camera) in the middle of a trip: part of it if the trip goes on
+                nxt = infos[k + 1]
+                same_trip = nxt["away"] == cur_info["away"] and days_between(ms, days[k + 1]) <= TRIP_GAP_DAYS + 1
+            if gap <= TRIP_GAP_DAYS + 1 and length <= TRIP_MAX_DAYS and same_trip:
+                cur.extend(ms)
+                cur_info = {"away": i["away"] or cur_info["away"], "folders": cur_info["folders"] | i["folders"]}
+                continue
+        cur, cur_info, first_day = list(ms), i, _day(ms[0])
+        events.append(cur)
     return events
 
 
@@ -132,9 +177,15 @@ def build_vault(cfg: Config, conn, log=print) -> dict:
 
     years = _write_years(gen, summaries)
     places = _write_places(gen, summaries)
-    themes = _write_themes(gen, media_by_id, moments_by_media, event_of)
-    collections = _write_collections(gen, media, moments_by_media, event_of, conn)
-    _write_ideas(gen, media_by_id, moments_by_media, event_of, collections)
+    # memories marked "not for content": their clips stay in the life story, but never in idea lists
+    from .memories import sync_content_flags
+
+    sync_content_flags(cfg, conn)
+    off = {r[0] for r in conn.execute("SELECT media_id FROM content_off")}
+    for_content = {k: v for k, v in moments_by_media.items() if k not in off}
+    themes = _write_themes(gen, media_by_id, for_content, event_of)
+    collections = _write_collections(gen, media, for_content, event_of, conn)
+    _write_ideas(gen, media_by_id, for_content, event_of, collections)
     _write_people(cfg, conn, vault, gen)
     _write_videos(conn, gen)
     _write_timeline(gen, summaries)
@@ -181,7 +232,7 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str],
     best = max(ev, key=lambda m: max((mo["broll_score"] or 0 for mo in moments_by_media.get(m["id"], [])), default=0))
     cover = _thumb(cfg, conn, vault, best["id"])
     # the event's id is its first clip; any of its clips matches (new footage may join the event later)
-    mem = next((memories[m["id"]] for m in ev if m["id"] in (memories or {})), None)
+    mem = event_memory(ev, memories or {})
 
     lines = [
         "---",
@@ -200,6 +251,7 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str],
         f"memory: {_q('[[' + mem['name'] + ']]') if mem else _q('')}",
         f"importance: {mem['importance'] if mem else ''}",
         f"era: {_q(mem['era']) if mem and mem['era'] else ''}",
+        f"content: {'no' if mem and not mem['content'] else 'yes'}",
         "---",
         f"# {first['taken_at'][:10]} · {place or 'Unknown place'} · {headline}",
         "",
@@ -211,7 +263,10 @@ def _write_event(cfg, conn, vault, folder, ev, moments_by_media, used: set[str],
     if mem:
         lines += ["> [!quote] What it meant" + (f" · {'★' * mem['importance']}" if mem["importance"] else ""),
                   *[f"> {x}" for x in (mem["meaning"] or "(not written yet)").splitlines()],
-                  f"> [[{mem['name']}|Full memory]]", ""]
+                  "> " + " · ".join(f"[[{n}|{'Full memory' if k == 0 else f'memory {k + 1}'}]]"
+                                    for k, n in enumerate(mem["names"])), ""]
+        if not mem["content"]:
+            lines += ["*Not for content: you marked this as personal / not important. Its clips are never suggested.*", ""]
     else:
         lines += [f"*No memory yet. To add one, ask Claude: \"interview me about this event\" (event id `{first['id']}`).*",
                   ""]
@@ -285,9 +340,10 @@ def read_memories(vault: Path) -> dict[str, dict]:
     """Memories/*.md written with the creator, by event_id: {name, importance, era, meaning}.
     `meaning` is the text under '## What it meant' (the first paragraph)."""
     out: dict[str, dict] = {}
-    for p in sorted((vault / "Memories").rglob("*.md")):
-        if p.name.startswith("_"):
-            continue
+    root = vault / "Memories"
+    for p in sorted(root.rglob("*.md")):
+        if any(part.startswith("_") for part in p.relative_to(root).parts):
+            continue  # templates, Memories/_merged/ backups
         text = p.read_text(encoding="utf-8", errors="ignore")
         fm = _frontmatter(text)
         if not fm.get("event_id"):
@@ -297,9 +353,31 @@ def read_memories(vault: Path) -> dict[str, dict]:
             importance = max(0, min(5, int(fm.get("importance") or 0)))
         except ValueError:
             importance = 0
+        meaning = m.group(1).strip() if m else ""
         out[fm["event_id"]] = {"name": p.relative_to(vault).with_suffix("").as_posix(), "importance": importance,
-                               "era": fm.get("era", ""), "meaning": m.group(1).strip() if m else ""}
+                               "era": fm.get("era", ""), "meaning": "" if meaning == "(not told yet)" else meaning,
+                               "content": (fm.get("content") or "yes").lower() not in ("no", "false"),
+                               "date": fm.get("date", "")}
     return out
+
+
+def event_memory(ev: list, memories: dict) -> dict | None:
+    """The memory of an event. Several memories can land in one event (older notes written when
+    events were split finer): they are read together, most important first."""
+    found, seen = [], set()
+    for m in ev:
+        mem = memories.get(m["id"])
+        if mem and mem["name"] not in seen:
+            seen.add(mem["name"])
+            found.append(mem)
+    if not found:
+        return None
+    found.sort(key=lambda x: (-x["importance"], x["date"]))
+    return {"name": found[0]["name"], "names": [x["name"] for x in found],
+            "importance": max(x["importance"] for x in found),
+            "era": next((x["era"] for x in found if x["era"]), ""),
+            "meaning": "\n\n".join(x["meaning"] for x in found if x["meaning"]),
+            "content": any(x["content"] for x in found)}
 
 
 def _write_interview_queue(gen: Path, summaries: list[dict], n: int = 40) -> None:
@@ -710,6 +788,7 @@ era:
 people: []
 feeling:           # e.g. proud, free, lost, nervous, grateful
 importance:        # 1-5: how much it matters to you now
+content: yes       # no = private / not important: its clips are never suggested for videos
 ---
 # What happened that day, in a line
 

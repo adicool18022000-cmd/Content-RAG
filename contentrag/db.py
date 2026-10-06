@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS usage (          -- which part of which clip went int
 );
 CREATE INDEX IF NOT EXISTS usage_media ON usage(media_id);
 
+CREATE TABLE IF NOT EXISTS content_off (    -- clips of memories marked "not for content"
+    media_id TEXT PRIMARY KEY,
+    memory   TEXT                           -- the memory note that says so
+);
+
 CREATE TABLE IF NOT EXISTS hidden (         -- never suggest these (privacy)
     kind   TEXT NOT NULL,                   -- moment | media | collection | person
     ref    TEXT NOT NULL,
@@ -154,7 +159,29 @@ CREATE TABLE IF NOT EXISTS requests (       -- one Claude request = one video wi
 """
 
 
+def _drive_missing(path: Path) -> Path | None:
+    """The macOS drive (/Volumes/<name>) the library lives on, if it isn't mounted."""
+    parts = Path(path).parts
+    if len(parts) > 3 and parts[1] == "Volumes":
+        vol = Path(*parts[:3])
+        return None if vol.is_dir() else vol
+    return None
+
+
+def require_drive(path: Path) -> None:
+    """A clear message instead of a traceback when the library's drive isn't plugged in / mounted."""
+    missing = _drive_missing(path)
+    if missing is not None:
+        raise SystemExit(
+            f"The drive {missing.name} isn't connected (nothing at {missing}).\n"
+            "- Plug it in and wait. After the Mac shut down suddenly, macOS checks the whole drive before it\n"
+            "  appears, which can take 10-30 minutes for a big drive (Disk Utility shows it greyed out meanwhile).\n"
+            f"- If it shows up as '{missing.name} 1' (ls /Volumes), eject everything, unplug, plug back in.\n"
+            "- If it never appears: Disk Utility > select it > First Aid.")
+
+
 def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
+    require_drive(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=not threads, timeout=30)
     conn.row_factory = sqlite3.Row

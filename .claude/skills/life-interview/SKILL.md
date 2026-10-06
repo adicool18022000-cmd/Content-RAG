@@ -38,3 +38,22 @@ creator knows.
    `Stories/` with hook ideas.
 7. Run `crag vault` so event and year notes show the memories, and the queue updates.
 8. End with what's still unknown and what to cover next time.
+
+## Review / clean up told memories
+
+When the user asks to check or clean their memories (e.g. "review my memories till 2019"):
+
+1. Read `Memories/**/*.md` for that period (skip `_merged/` and the template), oldest first,
+   with each note's event note for context.
+2. Fix voice-to-text problems without changing what they meant: misheard words, broken
+   sentences, filler ("umm", "uh", "like", repeated words), Whisper's made-up lines on silence
+   ("thanks for watching", "subscribe"). Keep Hinglish phrases where they matter, put names and
+   places right only when the footage or other notes confirm them, and never add facts, feelings
+   or names. Before the first change, keep the original text under `## As told (voice)` so nothing is lost.
+3. If the note says it's not important, private, or not to be used ("not important", "don't use",
+   "isko content mein mat daalna", "personal"), set `content: no` in the frontmatter (and
+   `importance: 1` if empty). Their clips are then never suggested for videos.
+4. Fill `people`, `era`, `feeling` and `importance` only from what the text says. Anything unclear
+   goes under `## Open questions` in that note.
+5. Run `crag vault`, then report: how many notes were cleaned, which are now `content: no`, the
+   open questions, and which eras/people emerged (offer to write the `Eras/` and `People/` notes).
