@@ -414,6 +414,9 @@ How the vault learns what things meant (the "brain"):
   by Whisper on your Mac (pick Hindi, English, or Hindi → English text). macOS Dictation (Fn twice)
   works in the boxes too. Feeling, importance stars, people and life chapter are one click each.
   Save & next (⌘↵) writes the memory into the vault. Drafts are kept if you leave mid-way.
+  Events with photos/videos of people you've hidden are yellow in the One by one timeline (filter: *With
+  hidden people*). Story mode leaves those pictures out, but here you can review them (yellow frame, with
+  who's in them) and tell that part too. They're still never used in videos unless you ask Claude for one.
   An event is one day (until 4 am), or one whole trip: consecutive days in a city away from home,
   or in a short folder like "Goa 2023". **Not important** (or unticking *Use this in my videos*)
   saves it as told, and its clips are never suggested for videos.

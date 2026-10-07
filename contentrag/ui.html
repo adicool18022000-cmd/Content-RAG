@@ -201,6 +201,15 @@ summary::-webkit-details-marker { display: none; }
 .mem-ev .tick { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; border: 1.5px solid var(--tertiary); }
 .mem-ev.done .tick { background: var(--green-dot); border-color: var(--green-dot); }
 .mem-ev.done.off .tick { background: var(--tertiary); border-color: var(--tertiary); }
+.mem-ev.hp { background: rgba(255, 204, 0, .16); box-shadow: inset 3px 0 0 #ffcc00; }
+.mem-ev.hp:hover { background: rgba(255, 204, 0, .26); }
+.mem-ev.hp[aria-current="true"] { background: rgba(255, 204, 0, .32); }
+.mem-ev .hpt { color: #a07800; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .mem-ev .hpt { color: #ffd60a; } }
+.notice.hp { background: rgba(255, 204, 0, .16); border: 1px solid rgba(255, 204, 0, .45); color: var(--label); }
+.strip button.hp { border-color: #ffcc00; }
+.strip button.hp::after { content: "hidden"; position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 600;
+                          background: #ffcc00; color: #000; border-radius: 5px; padding: 0 4px; }
 .mem-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .mem-head h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.02em; }
 .mem-head .sub { color: var(--secondary); margin-top: 4px; }
@@ -486,7 +495,7 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
         <div class="toolbar">
           <select class="field" id="memYear" aria-label="Year"></select>
           <select class="field" id="memShow" aria-label="Which events">
-            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option>
+            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option><option value="hidden">With hidden people</option>
           </select>
         </div>
         <div class="muted" id="memProgress" style="font-size:13px;padding:0 4px">Loading…</div>
@@ -592,17 +601,18 @@ async function loadMemories() {
 function renderMemList() {
   const y = $("memYear").value, show = $("memShow").value;
   const done = MEM.events.filter(e => e.done).length;
-  $("memProgress").textContent = `${done} of ${MEM.events.length} events told`;
+  const hp = MEM.events.filter(e => e.hidden).length;
+  $("memProgress").innerHTML = `${done} of ${MEM.events.length} events told` + (hp ? ` · <span class="hpt">${hp} with hidden people</span>` : "");
   let month = "", html = "";
   MEM.events.forEach((e, i) => {
     if (e.date.slice(0, 4) !== y) return;
-    if ((show === "todo" && e.done) || (show === "done" && !e.done)) return;
+    if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden)) return;
     const m = e.date.slice(0, 7);
     if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
-    html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
+    html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}${e.hidden ? " hp" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
       <span class="tick" title="${e.done ? (e.content === false ? "Not for content" : "Told") : "Not told yet"}"></span>
       <span style="min-width:0"><div class="t">${esc(e.date.slice(8))} · ${esc(e.place || e.title)}</div>
-      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}</div></span></button>`;
+      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}${e.hidden ? ` · <span class="hpt">${e.hidden} with hidden people</span>` : ""}</div></span></button>`;
   });
   $("memList").innerHTML = html || `<div class="empty" style="padding:24px">Nothing here.</div>`;
   const list = $("memList"), cur = list.querySelector('[aria-current="true"]');
@@ -620,7 +630,8 @@ async function openEvent(i) {
   mstore.set("mem.last", e.id);
   $("memYear").value = e.date.slice(0, 4); renderMemList();
   $("memMain").innerHTML = `<div class="empty">Loading…</div>`;
-  const r = await fetch(`/api/memories/event?id=${encodeURIComponent(e.id)}${MEM.hidden ? "&hidden=1" : ""}`);
+  const showHidden = MEM.hidden || $("memShow").value === "hidden";  // reviewing them: show them straight away
+  const r = await fetch(`/api/memories/event?id=${encodeURIComponent(e.id)}${showHidden ? "&hidden=1" : ""}`);
   if (!r.ok) { $("memMain").innerHTML = `<div class="empty">Couldn't load this event.</div>`; return; }
   MEM.ev = await r.json();
   renderEvent();
@@ -637,9 +648,12 @@ function renderEvent() {
         <div class="sub">${esc(timeRange)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length} photo${ev.items.length === 1 ? "" : "s"}/video${ev.items.length === 1 ? "" : "s"}</div></div>
       <div class="row-actions"><button class="btn" type="button" id="mPrev">‹ Earlier</button><button class="btn" type="button" id="mNext">Later ›</button></div></div>
     ${ev.items.length ? `<div class="stage" id="mStage"></div><div class="strip" id="mStrip" aria-label="Photos and videos in this event">${ev.items.map((it, k) =>
-      `<button type="button" data-k="${k}" aria-current="${k === 0}" title="${esc(it.time + " " + (it.title || ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
+      `<button type="button" data-k="${k}" aria-current="${k === 0}"${it.hidden_people && it.hidden_people.length ? ' class="hp"' : ""} title="${esc(it.time + " " + (it.title || "") + (it.hidden_people && it.hidden_people.length ? " · with " + it.hidden_people.join(", ") : ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
       <div class="caption" id="mCaption"></div>` : `<div class="notice">All items of this event include people you've hidden.</div>`}
-    ${ev.held_back ? `<div class="muted" style="font-size:13px">${ev.held_back} item${ev.held_back === 1 ? "" : "s"} with people you've hidden ${MEM.hidden ? "are shown" : "are left out"}. <a href="#" id="mHidden">${MEM.hidden ? "Hide them" : "Show them anyway"}</a></div>` : ""}
+    ${ev.held_back ? `<div class="notice hp" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px"><b>${ev.held_back} photo${ev.held_back === 1 ? "" : "s"}/video${ev.held_back === 1 ? "" : "s"} with people you've hidden</b>
+        <div style="font-size:13px">${ev.hidden_shown ? "Shown below with a yellow frame. They never go into your videos; tell me in chat if one can be used (their face gets blurred)." : "Left out of Story mode and your videos. Look through them here if you want to tell this part too."}</div></div>
+      <button class="btn small" type="button" id="mHidden">${ev.hidden_shown ? "Hide them" : "Review them"}</button></div>` : ""}
     ${m.merged > 1 ? `<div class="notice">You told this day in ${m.merged} parts before (events used to be split finer). They're shown together below; saving combines them into one memory.</div>` : ""}
     <div class="card ask stack" style="gap:18px">
       <div><label for="mStory">What was happening? <span class="hint">Where were you, who was there, why, what happened before and after.</span></label>
@@ -679,7 +693,8 @@ function renderEvent() {
   $("mSkip").onclick = () => { mstore.set("mem.draft." + ev.id, null); MEM.dirty = false; openEvent(MEM.idx + 1); };
   $("mSave").onclick = () => saveMemory();
   $("mUnimportant").onclick = () => saveMemory({content: false, unimportant: true});
-  if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !MEM.hidden; openEvent(MEM.idx); };
+  if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !ev.hidden_shown;
+    if (!MEM.hidden && $("memShow").value === "hidden") $("memShow").value = "all"; openEvent(MEM.idx); };
   if ($("mStrip")) $("mStrip").onclick = (x) => { const b = x.target.closest("button"); if (b) showItem(+b.dataset.k); };
   $("mFeel").onclick = (x) => { const c = x.target.closest(".chip"); if (c) { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); MEM.dirty = true; } };
   $("mStars").onclick = (x) => { const b = x.target.closest("button"); if (!b) return; const n = +b.dataset.n;
@@ -719,7 +734,8 @@ function showItem(k) {
   }
   $("mCaption").innerHTML = `<div><b>${esc(it.time)}</b> · ${esc(it.title || (it.kind === "video" ? "Video" : "Photo"))}</div>
     ${it.summary ? `<div class="muted">${esc(it.summary)}</div>` : ""}
-    ${it.said.length ? `<div class="said">Said: ${it.said.map(x => "“" + esc(x) + "”").join(" ")}</div>` : ""}`;
+    ${it.said.length ? `<div class="said">Said: ${it.said.map(x => "“" + esc(x) + "”").join(" ")}</div>` : ""}
+    ${it.hidden_people && it.hidden_people.length ? `<div><span class="badge" style="background:#ffcc00;color:#000">With ${esc(it.hidden_people.join(", "))}: never used in videos</span></div>` : ""}`;
 }
 function formData() {
   return {id: MEM.ev.id, story: $("mStory").value, meaning: $("mMeaning").value, angle: $("mAngle").value,

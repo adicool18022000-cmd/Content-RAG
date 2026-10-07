@@ -55,6 +55,7 @@ def _place(ev: list) -> str:
 def list_events(cfg: Config, conn) -> dict:
     """Every event, oldest first, with whether it already has a memory."""
     memories = read_memories(cfg.vault_dir)
+    with_hidden = _media_with_hidden_people(conn)
     out = []
     for ev in _events(cfg, conn):
         mem = event_memory(ev, memories)
@@ -63,8 +64,19 @@ def list_events(cfg: Config, conn) -> dict:
                     "title": _headline(ev), "items": len(ev),
                     "videos": sum(1 for m in ev if m["kind"] == "video"),
                     "done": bool(mem), "importance": mem["importance"] if mem else 0,
-                    "content": mem["content"] if mem else True})
-    return {"events": out, "done": sum(1 for e in out if e["done"]), "feelings": FEELINGS}
+                    "content": mem["content"] if mem else True,
+                    "hidden": sum(1 for m in ev if m["id"] in with_hidden)})  # photos/videos with people you hid
+    return {"events": out, "done": sum(1 for e in out if e["done"]), "feelings": FEELINGS,
+            "with_hidden": sum(1 for e in out if e["hidden"])}
+
+
+def _media_with_hidden_people(conn) -> set[str]:
+    hidden = hidden_sets(conn)["person"]
+    if not hidden:
+        return set()
+    marks = ",".join("?" * len(hidden))
+    return {r[0] for r in conn.execute(f"SELECT DISTINCT media_id FROM faces WHERE person_id IN ({marks})",
+                                       [int(x) for x in hidden])}
 
 
 def _find(cfg: Config, conn, event_id: str) -> list | None:
@@ -81,6 +93,12 @@ def _frames(conn, media_id: str, n: int) -> list[str]:
     return [rows[round(i * (len(rows) - 1) / (n - 1))]["path"] for i in range(n)]
 
 
+def _names_in(conn, m, hidden: set[str]) -> list[str]:
+    from .usage import hidden_people_in
+
+    return hidden_people_in(conn, m["id"], 0, (m["duration"] or 0) + 1, hidden) or ["someone you hid"]
+
+
 def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = False) -> dict | None:
     ev = _find(cfg, conn, event_id)
     if ev is None:
@@ -88,10 +106,11 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
     hidden = hidden_sets(conn)["person"]
     items, held_back = [], 0
     for m in ev:
-        if hidden and not show_hidden_people and (
-                (m["kind"] == "photo" and photo_has_hidden_person(conn, m["id"], hidden))
-                or (m["kind"] == "video" and hidden_ranges(conn, m["id"], hidden))):
-            held_back += 1
+        is_hidden = bool(hidden) and (
+            (m["kind"] == "photo" and photo_has_hidden_person(conn, m["id"], hidden))
+            or (m["kind"] == "video" and bool(hidden_ranges(conn, m["id"], hidden))))
+        held_back += is_hidden
+        if is_hidden and not show_hidden_people:
             continue
         moments = conn.execute("SELECT description, speech_en FROM moments WHERE media_id=? ORDER BY start",
                                (m["id"],)).fetchall()
@@ -102,6 +121,7 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
             "frames": frames, "thumb": frames[len(frames) // 2] if frames else None,
             "said": [x["speech_en"] for x in moments if x["speech_en"]][:4],
             "seen": [x["description"] for x in moments if x["description"]][:4],
+            "hidden_people": _names_in(conn, m, hidden) if is_hidden else [],
         })
     ids = [m["id"] for m in ev]
     marks = ",".join("?" * len(ids))
@@ -112,6 +132,7 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
     return {"id": ev[0]["id"], "date": ev[0]["taken_at"][:10], "time": ev[0]["taken_at"][11:16],
             "end": ev[-1]["taken_at"][:16].replace("T", " "), "place": _place(ev), "title": _headline(ev),
             "tags": [t for t, _ in tags.most_common(8)], "items": items, "held_back": held_back,
+            "hidden_shown": show_hidden_people,
             "people_seen": people, "memory": load_memory(cfg, ev), "eras": eras(cfg)}
 
 

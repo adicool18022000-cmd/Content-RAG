@@ -688,6 +688,17 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
         for s in sel:
             assert s["source_out"] <= 4.0 or s["source_in"] >= 8.0
 
+    # Memories tab: events with a hidden person are flagged; their photos are shown only on request
+    from contentrag import memories as _mem
+
+    evs = _mem.list_events(cfg, conn)
+    goa_ev = next(e for e in evs["events"] if e["hidden"])
+    assert evs["with_hidden"] >= 1
+    d = _mem.event_detail(cfg, conn, goa_ev["id"])
+    assert d["held_back"] >= 1 and not any(i["hidden_people"] for i in d["items"])
+    shown = _mem.event_detail(cfg, conn, goa_ev["id"], show_hidden_people=True)
+    assert any(i["hidden_people"] == ["Ex"] for i in shown["items"]) and shown["held_back"] == d["held_back"]
+
     # held back: the moments she's in are offered separately (whole, with her name), never by default
     from contentrag.edit.plan import Clip, EditPlan
     from contentrag.edit.run import protect_hidden_people, render_plan
