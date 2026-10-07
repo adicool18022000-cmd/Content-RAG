@@ -1402,3 +1402,65 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
         transcribe=lambda path, **kw: {"segments": [{"text": " Thank you."}]}))
     with pytest.raises(RuntimeError, match="couldn't hear"):  # Whisper's phantom line on noise
         memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
+
+
+def test_story_mode(env, monkeypatch, tmp_path):
+    import sys
+
+    from contentrag import memories, story
+
+    cfg, conn = _analysed(env, monkeypatch)
+    evs = memories.list_events(cfg, conn)["events"]
+    a, b = evs[0]["id"], evs[1]["id"]
+    # what was said goes to the event on screen while it was said
+    tl = [{"event_id": a, "start": 0, "end": 10}, {"event_id": b, "start": 10, "end": 14},
+          {"event_id": a, "start": 14, "end": 20}]
+    got = story.assign([{"start": 1, "end": 4, "text": "one"}, {"start": 9, "end": 12.5, "text": "two"},
+                        {"start": 15, "end": 16, "text": "three"}, {"start": 30, "end": 31, "text": "late"}], tl)
+    assert got == {a: ["one", "three", "late"], b: ["two"]}
+
+    # a session: chunks (a retry of the same chunk is ignored), timeline, finish -> drafts -> save
+    rec = tmp_path / "rec.webm"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:d=6", "-c:a", "libopus", str(rec)],
+                   check=True)
+    data = rec.read_bytes()
+    s = story.start(cfg)
+    story.append_chunk(cfg, s["id"], 0, data[:2000])
+    story.append_chunk(cfg, s["id"], 0, data[:2000])
+    story.append_chunk(cfg, s["id"], 1, data[2000:])
+    with pytest.raises(ValueError):
+        story.append_chunk(cfg, s["id"], 5, b"x")
+    assert story.load(cfg, s["id"])["bytes"] == len(data)
+    segments = [{"start": 0.5, "end": 2.5, "text": " Goa trip with Rahul, first trip I planned myself, bahut maza aaya."},
+                {"start": 4.0, "end": 5.0, "text": " Thank you."}]
+    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=lambda path, **kw: {"segments": segments}))
+    monkeypatch.setattr(story, "ai_name", lambda cfg: None)  # no AI: their words are kept as said
+    story.update(cfg, s["id"], [{"event_id": a, "start": 0, "end": 3.5}, {"event_id": b, "start": 3.5, "end": 6}], {b: "skip"})
+    out = story.process(cfg, s["id"])
+    assert out["state"] == "review" and [d["event_id"] for d in out["drafts"]] == [a, b]
+    da, db_ = out["drafts"]
+    assert "Rahul" in da["story"] and da["content"] and da["told"]
+    assert db_["content"] is False  # pressed X; Whisper's phantom "Thank you." was dropped
+    assert [x["id"] for x in story.sessions(cfg)] == [s["id"]]
+    res = story.approve(cfg, conn, s["id"], out["drafts"])
+    assert res["saved"] == 2 and not (cfg.library_dir / "story" / f"{s['id']}.audio").exists()
+    note = cfg.vault_dir / memories.event_detail(cfg, conn, a)["memory"]["note"]
+    text = note.read_text()
+    assert "## As told (voice)" in text and "source: story mode" in text
+    assert memories.event_detail(cfg, conn, b)["memory"]["content"] is False
+    assert story.sessions(cfg) == []
+
+    # with an AI: drafts come from it, and X still wins
+    def fake_ai(cfg, ai, items, context):
+        return [{"event_id": it["event_id"], "story": "I went to Goa with Rahul.", "meaning": "My first own trip.",
+                 "feeling": ["free"], "importance": 9, "people": ["Rahul"], "era": "College", "content": True,
+                 "angle": ""} for it in items]
+    monkeypatch.setattr(story, "ai_name", lambda cfg: "gemini")
+    monkeypatch.setattr(story, "_draft_batch", lambda cfg, ai, items, context: [
+        dict(d, content=d["content"] and it.get("mark") != "skip", importance=min(5, d["importance"]))
+        for d, it in zip(fake_ai(cfg, ai, items, context), items)])
+    s2 = story.start(cfg)
+    story.append_chunk(cfg, s2["id"], 0, data)
+    story.update(cfg, s2["id"], [{"event_id": a, "start": 0, "end": 6}], {})
+    d2 = story.process(cfg, s2["id"])["drafts"][0]
+    assert d2["story"] == "I went to Goa with Rahul." and d2["feeling"] == "free" and d2["importance"] == 5

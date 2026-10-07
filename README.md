@@ -398,7 +398,15 @@ How the vault learns what things meant (the "brain"):
   - `People/`, `Places/`.
   - `Stories/`: content-ready memories.
   - `Me.md`: who you are now.
-- **Memories tab** (`crag ui` → Memories): your events in date and time order. For each one you see
+- **Story mode** (`crag ui` → Memories → Story mode, the fastest way): your events play as a slideshow in
+  date order, and you just talk. An event stays on screen while you speak and moves on after a few quiet
+  seconds. <kbd>Space</kbd> pauses, <kbd>←</kbd> <kbd>→</kbd> go back or forward, and <kbd>X</kbd> marks
+  it not important. One recording runs for the whole session and is saved to the drive every 3 seconds;
+  an interrupted session can be finished later. On **Finish**, Whisper (on your Mac) turns it into text,
+  each sentence goes to the event that was on screen, and Claude (your Claude Code login; else Gemini;
+  else your words as said) writes each memory: story, what it meant, feeling, importance, people,
+  chapter, and whether it's for content. You check them on one screen and **Save all**.
+- **One by one** (`crag ui` → Memories): your events in date and time order. For each one you see
   the photos and play the videos, then tell the story: typed, or with 🎙 Speak, which is transcribed
   by Whisper on your Mac (pick Hindi, English, or Hindi → English text). macOS Dictation (Fn twice)
   works in the boxes too. Feeling, importance stars, people and life chapter are one click each.

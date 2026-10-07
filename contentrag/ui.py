@@ -332,6 +332,17 @@ def make_handler(cfg: Config, job: Job):
                     finally:
                         conn.close()
                     return self._json(ev) if ev else self._json({"error": "not found"}, 404)
+                if url.path == "/api/story/sessions":
+                    from . import story
+
+                    return self._json({"sessions": story.sessions(cfg), "ai": story.ai_name(cfg)})
+                if url.path == "/api/story/session":
+                    from . import story
+
+                    try:
+                        return self._json(story.load(cfg, qs.get("id", "")))
+                    except ValueError as e:
+                        return self._json({"error": str(e)}, 404)
                 if url.path == "/api/thumb":
                     p = (library / qs.get("p", "")).resolve()
                     if library not in p.parents or not p.is_file():
@@ -443,6 +454,8 @@ def make_handler(cfg: Config, job: Job):
                     return self._json({"error": str(e)}, 400)
                 finally:
                     conn.close()
+            if url.path.startswith("/api/story/"):
+                return self._story(url)
             if url.path == "/api/transcribe":
                 from .memories import transcribe_audio
 
@@ -465,6 +478,41 @@ def make_handler(cfg: Config, job: Job):
                     stop_file(cfg).touch()  # also stops an Autopilot started from the terminal
                 job.log("[ui] stop requested — the current request batch finishes first")
                 return self._json({"ok": True})
+            return self._json({"error": "not found"}, 404)
+
+        def _story(self, url):
+            from . import story
+
+            qs = {k: v[-1] for k, v in parse_qs(url.query).items()}
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 100 * 1024 * 1024:
+                return self._json({"error": "too big"}, 400)
+            raw = self.rfile.read(length) if length else b""
+            try:
+                if url.path == "/api/story/chunk":
+                    return self._json(story.append_chunk(cfg, qs.get("id", ""), int(qs.get("seq", -1)), raw))
+                body = json.loads(raw or b"{}")
+                sid = str(body.get("id") or "")
+                if url.path == "/api/story/start":
+                    return self._json(story.start(cfg, str(body.get("mime") or "audio/webm")))
+                if url.path == "/api/story/update":
+                    story.update(cfg, sid, body.get("timeline") or [], body.get("marks") or {})
+                    return self._json({"ok": True})
+                if url.path == "/api/story/finish":
+                    s = story.load(cfg, sid)
+                    return self._json(story.finish(cfg, sid, body.get("timeline") or s["timeline"],
+                                                   body.get("marks") or s["marks"], str(body.get("mode") or "auto")))
+                if url.path == "/api/story/approve":
+                    conn = connect(cfg.db_path)
+                    try:
+                        return self._json(story.approve(cfg, conn, sid, body.get("drafts") or []))
+                    finally:
+                        conn.close()
+                if url.path == "/api/story/discard":
+                    story.discard(cfg, sid)
+                    return self._json({"ok": True})
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
             return self._json({"error": "not found"}, 404)
 
         def _search(self, qs):

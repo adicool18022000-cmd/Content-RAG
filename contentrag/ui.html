@@ -254,6 +254,65 @@ summary::-webkit-details-marker { display: none; }
   .mem-head h1 { font-size: 24px; }
 }
 
+/* ---------------------------------------------------------------- story mode */
+.story-setup { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.story-setup .opts { display: grid; gap: 14px; }
+.story-setup .opt { display: grid; gap: 6px; }
+.story-setup .opt > span { font-weight: 600; font-size: 14px; }
+.story-steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; color: var(--secondary); }
+.story-steps b { color: var(--label); font-weight: 600; }
+.kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--separator);
+       background: var(--surface-2); font: 12px var(--mono); text-align: center; color: var(--label); }
+.story-live { position: fixed; inset: 0; z-index: 50; background: #0b0b0c; color: #f5f5f7; display: grid;
+              grid-template-rows: auto minmax(0, 1fr) auto; }
+.story-bar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; flex-wrap: wrap;
+             border-bottom: 1px solid rgba(255,255,255,.08); }
+.story-bar .rec { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.story-bar .rec::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #ff453a; animation: blink 1.2s infinite; }
+.story-bar .rec.paused::before { animation: none; background: #ff9f0a; }
+.story-bar .lvl { width: 90px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.15); overflow: hidden; }
+.story-bar .lvl i { display: block; height: 100%; width: 0; background: #30d158; transition: width .08s; }
+.story-bar .grow { flex: 1; min-width: 0; color: rgba(255,255,255,.6); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.story-bar .btn { background: rgba(255,255,255,.12); color: #fff; }
+.story-bar .btn:hover { background: rgba(255,255,255,.2); }
+.story-bar .btn.primary { background: var(--accent); }
+.story-stage { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 14px; padding: 16px 20px 8px; min-height: 0; }
+.collage { display: grid; gap: 6px; min-height: 0; border-radius: 16px; overflow: hidden; }
+.collage.n1 { grid-template-columns: 1fr; }
+.collage.n2 { grid-template-columns: 1fr 1fr; }
+.collage.n3, .collage.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.collage.n3 > :first-child { grid-row: span 2; }
+.collage.n5, .collage.n6 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.collage.n5 > :first-child { grid-row: span 2; }
+.collage .tile { position: relative; background: #000; min-height: 0; overflow: hidden; }
+.collage img, .collage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.collage .more { position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,.65); color: #fff;
+                 border-radius: 980px; padding: 3px 10px; font-size: 13px; }
+.story-cap { display: grid; gap: 4px; }
+.story-cap .when { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+.story-cap .what { color: rgba(255,255,255,.7); }
+.story-foot { padding: 8px 20px 16px; display: grid; gap: 8px; }
+.story-next { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; }
+.story-next i { display: block; height: 100%; width: 0; background: var(--accent); }
+.story-hint { color: rgba(255,255,255,.55); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
+.story-hint .kbd { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.15); color: #fff; }
+.story-skip { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.12);
+              padding: 6px 14px; border-radius: 980px; font-size: 13px; }
+.draft { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; }
+.draft img { width: 120px; height: 90px; object-fit: cover; border-radius: 10px; background: #111; }
+.draft .f { display: grid; gap: 8px; }
+.draft textarea { width: 100%; min-height: 70px; resize: vertical; border-radius: 10px; border: 1px solid transparent;
+                  background: var(--fill); padding: 10px 12px; font: inherit; color: inherit; line-height: 1.45; }
+.draft .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.draft .stars button { width: 26px; height: 26px; font-size: 20px; }
+.draft.off { opacity: .55; }
+@media (max-width: 860px) {
+  .story-setup { grid-template-columns: 1fr; }
+  .draft { grid-template-columns: 1fr; }
+  .draft .row { grid-template-columns: 1fr; }
+  .story-cap .when { font-size: 22px; }
+}
+
 /* ---------------------------------------------------------------- dialog, toast */
 dialog { border: 0; padding: 0; border-radius: 20px; width: min(920px, calc(100vw - 32px)); background: var(--surface);
          color: var(--label); box-shadow: 0 24px 80px rgba(0, 0, 0, .35); }
@@ -392,10 +451,15 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
 
   <!-- ======================================================== MEMORIES -->
   <section data-page="memories" hidden>
-    <div class="page-head"><h1>Memories</h1>
-      <p>Go through your life in order. Look at the photos and videos, then tell the story behind them, typed or by voice.
+    <div class="page-head" style="display:flex;justify-content:space-between;gap:16px;align-items:flex-end;flex-wrap:wrap">
+      <div><h1>Memories</h1>
+      <p>Go through your life in order and tell the story behind your photos and videos.
         It's saved in your Life Vault, and Claude uses it when it writes about you.</p></div>
-    <div class="mem">
+      <div class="segmented" role="tablist" aria-label="How to tell" id="memMode">
+        <button type="button" data-mode="story" aria-selected="true">Story mode</button>
+        <button type="button" data-mode="one" aria-selected="false">One by one</button></div></div>
+    <div id="storyView" class="stack"></div>
+    <div class="mem" id="oneView" hidden>
       <aside class="mem-side">
         <div class="toolbar">
           <select class="field" id="memYear" aria-label="Year"></select>
@@ -478,7 +542,7 @@ function showTab(name) {
   document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
   if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
   if (name === "people") loadPeople();
-  if (name === "memories") loadMemories();
+  if (name === "memories") loadMemories().then(showMemMode);
   window.scrollTo({top: 0});
 }
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -657,8 +721,8 @@ async function saveMemory(opts) {
   toast("Saved to your Life Vault");
   openEvent(MEM.idx + 1 < MEM.events.length ? MEM.idx + 1 : MEM.idx);  // the last one: stay and show it saved
 }
-async function fillMics() {
-  const sel = $("mMic"); if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+async function fillMics(sel = $("mMic")) {
+  if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
   try {
     const mics = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput" && d.deviceId !== "default");
     const want = mstore.get("mem.mic") || "";
@@ -713,12 +777,313 @@ async function toggleMic(btn) {
 }
 document.addEventListener("keydown", (e) => {
   if ($("memMain") && document.querySelector('[data-page="memories"]').hidden) return;
+  if (STORY.live || $("oneView").hidden) return;
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && $("mSave")) { e.preventDefault(); saveMemory(); return; }
   if (e.target.matches("textarea, input, select") || !MEM.ev) return;
   if (e.key === "ArrowRight") showItem(MEM.item + 1);
   if (e.key === "ArrowLeft") showItem(MEM.item - 1);
 });
 window.addEventListener("beforeunload", saveDraft);
+
+/* ------------------------------------------------------------- story mode */
+const STORY = {live: false, sid: null, rec: null, stream: null, seq: 0, queue: [], sending: false, order: [], pos: 0,
+  timeline: [], marks: {}, cur: null, acc: 0, runAt: 0, paused: false, lastVoice: 0, shownAt: 0, wait: 4, floor: 4,
+  cache: {}, raf: 0, ticker: 0, saver: 0, ctx: null, mode: "auto", review: null};
+const audioNow = () => (STORY.acc + (STORY.paused || !STORY.runAt ? 0 : performance.now() - STORY.runAt)) / 1000;
+
+function showMemMode() {
+  const mode = mstore.get("mem.mode") || "story";
+  document.querySelectorAll("#memMode button").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === mode));
+  $("storyView").hidden = mode !== "story"; $("oneView").hidden = mode === "story";
+  if (mode === "story" && !STORY.live && !STORY.review) renderStorySetup();
+}
+$("memMode").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; mstore.set("mem.mode", b.dataset.mode); showMemMode(); };
+
+async function renderStorySetup() {
+  if (!MEM.events.length) await loadMemories();
+  const sj = await (await fetch("/api/story/sessions")).json().catch(() => ({sessions: []}));
+  const firstTodo = MEM.events.findIndex(e => !e.done);
+  const cur = MEM.idx >= 0 ? MEM.idx : firstTodo;
+  const label = (i) => i >= 0 && MEM.events[i] ? `${fmtDate(MEM.events[i].date)} · ${MEM.events[i].place || MEM.events[i].title}` : "—";
+  const ai = {"claude-code": "Claude writes the memories from your words (your Claude Code login, no extra cost).",
+              "gemini": "Gemini writes the memories from your words (your Gemini key)."}[sj.ai] ||
+             "No AI is set up, so your words are saved as you said them (Claude can tidy them later).";
+  const done = MEM.events.filter(e => e.done).length;
+  $("storyView").innerHTML = `
+    ${(sj.sessions || []).map(x => `<div class="notice" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><b>${x.state === "review" ? "Memories waiting for you to check" : x.state === "recording" ? "A session was interrupted" : x.state === "error" ? "A session couldn't be finished" : "A session is being processed"}</b>
+      <div class="muted" style="font-size:13px">${esc(x.created)} · ${x.events} events${x.message ? " · " + esc(x.message) : ""}</div></div>
+      ${x.state === "review" ? `<button class="btn primary small" data-review="${x.id}">Check & save</button>` :
+        x.state === "processing" && x.running ? `<button class="btn small" data-review="${x.id}">Show progress</button>` :
+        `<button class="btn primary small" data-finish="${x.id}">${x.state === "recording" ? "Finish it" : "Try again"}</button>`}
+      <button class="btn plain small" data-discard="${x.id}">Discard</button></div>`).join("")}
+    <div class="card story-setup">
+      <div class="stack" style="gap:14px">
+        <h2 style="margin:0">Talk through your life</h2>
+        <ol class="story-steps">
+          <li><b>Your events play like a slideshow</b>, in date order, with their photos and videos.</li>
+          <li><b>Just talk</b>: what happened, who was there, how it felt. Say "skip" or press <span class="kbd">X</span> for things that don't matter.</li>
+          <li><b>It moves on by itself</b> when you're quiet for a few seconds. Long stories keep the event on screen.</li>
+          <li><b>Press Finish</b>. Your voice becomes text on this Mac, and the memories are written for you to check and save.</li>
+        </ol>
+        <div class="muted" style="font-size:13px">${esc(ai)} ${done} of ${MEM.events.length} events told so far.</div>
+      </div>
+      <div class="opts">
+        <label class="opt"><span>Start from</span><select class="field" id="sStart">
+          ${firstTodo >= 0 ? `<option value="${firstTodo}">First event not told yet (${esc(label(firstTodo))})</option>` : ""}
+          ${cur >= 0 && cur !== firstTodo ? `<option value="${cur}">The event open in One by one (${esc(label(cur))})</option>` : ""}
+          <option value="year">Start of a year…</option></select></label>
+        <label class="opt" id="sYearRow" hidden><span>Year</span><select class="field" id="sYear">${[...new Set(MEM.events.map(e => e.date.slice(0, 4)))].map(y => `<option>${y}</option>`).join("")}</select></label>
+        <label class="check"><input type="checkbox" id="sTold"> Also show events already told</label>
+        <label class="opt"><span>Move on after you're quiet for</span><select class="field" id="sWait">
+          ${[3, 4, 6, 8, 12].map(n => `<option value="${n}"${n === (+mstore.get("story.wait") || 4) ? " selected" : ""}>${n} seconds</option>`).join("")}</select></label>
+        <label class="opt"><span>Your voice</span><select class="field" id="sLang">
+          <option value="auto">Automatic</option><option value="hi">Hindi (देवनागरी)</option><option value="en">English</option><option value="translate">Hindi → English text</option></select></label>
+        <label class="opt"><span>Microphone</span><select class="field" id="sMic"><option value="">Default</option></select></label>
+        <button class="btn primary large" type="button" id="sGo">● Start talking</button>
+      </div>
+    </div>`;
+  try { $("sLang").value = mstore.get("story.lang") || "auto"; } catch (e) {}
+  fillMics($("sMic"));
+  $("sMic").onchange = () => mstore.set("mem.mic", $("sMic").value);
+  $("sStart").onchange = () => { $("sYearRow").hidden = $("sStart").value !== "year"; };
+  $("sGo").onclick = startStory;
+  $("storyView").querySelectorAll("[data-review]").forEach(b => b.onclick = () => openReview(b.dataset.review));
+  $("storyView").querySelectorAll("[data-finish]").forEach(b => b.onclick = async () => {
+    await post("/api/story/finish", {id: b.dataset.finish, mode: mstore.get("story.lang") || "auto"}); openReview(b.dataset.finish); });
+  $("storyView").querySelectorAll("[data-discard]").forEach(b => b.onclick = async () => {
+    if (!confirm("Discard this session? What you said in it is deleted.")) return;
+    await post("/api/story/discard", {id: b.dataset.discard}); renderStorySetup(); });
+}
+
+async function startStory() {
+  let start = $("sStart").value;
+  if (start === "year") start = MEM.events.findIndex(e => e.date.slice(0, 4) === $("sYear").value);
+  start = Math.max(0, +start);
+  const told = $("sTold").checked;
+  STORY.order = []; for (let i = start; i < MEM.events.length; i++) if (told || !MEM.events[i].done) STORY.order.push(i);
+  if (!STORY.order.length) { toast("Nothing left to tell from there"); return; }
+  STORY.wait = +$("sWait").value; STORY.mode = $("sLang").value;
+  mstore.set("story.wait", STORY.wait); mstore.set("story.lang", STORY.mode);
+  if (!navigator.mediaDevices || !window.MediaRecorder) { toast("This browser can't record. Try Chrome or Safari."); return; }
+  const dev = $("sMic").value;
+  try { STORY.stream = await navigator.mediaDevices.getUserMedia({audio: dev ? {deviceId: {exact: dev}} : {echoCancellation: true, noiseSuppression: true}}); }
+  catch (e) { toast("Microphone not available. Allow it for this page (lock icon in the address bar) or pick another mic."); return; }
+  const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+  const sj = await (await post("/api/story/start", {mime: type || "audio/webm"})).json();
+  if (!sj.id) { toast(sj.error || "Couldn't start"); STORY.stream.getTracks().forEach(t => t.stop()); return; }
+  Object.assign(STORY, {sid: sj.id, seq: 0, queue: [], timeline: [], marks: {}, cur: null, acc: 0, paused: false, pos: 0, live: true, floor: 4});
+  STORY.rec = new MediaRecorder(STORY.stream, type ? {mimeType: type} : {});
+  STORY.rec.ondataavailable = (e) => { if (e.data.size) { STORY.queue.push(e.data); pump(); } };
+  try {
+    STORY.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    STORY.an = STORY.ctx.createAnalyser(); STORY.an.fftSize = 1024;
+    STORY.ctx.createMediaStreamSource(STORY.stream).connect(STORY.an);
+  } catch (e) { STORY.an = null; }
+  renderLive();
+  STORY.rec.start(3000);  // a piece every 3 s goes to the drive: a crash loses at most a few seconds
+  STORY.runAt = performance.now();
+  showStoryEvent(0);
+  STORY.raf = requestAnimationFrame(storyLoop);
+  STORY.ticker = setInterval(storyTick, 250);
+  STORY.saver = setInterval(saveTimeline, 10000);
+  window.addEventListener("beforeunload", storyBeforeUnload);
+}
+function storyBeforeUnload(e) { if (STORY.live) { saveTimeline(); e.preventDefault(); e.returnValue = ""; } }
+
+async function pump() {
+  if (STORY.sending) return; STORY.sending = true;
+  while (STORY.queue.length) {
+    try {
+      const r = await fetch(`/api/story/chunk?id=${STORY.sid}&seq=${STORY.seq}`, {method: "POST", headers: {"X-Crag": "1"}, body: STORY.queue[0]});
+      if (!r.ok) throw new Error((await r.json()).error);
+      STORY.queue.shift(); STORY.seq++;
+    } catch (e) { await new Promise(r => setTimeout(r, 2000)); }  // drive busy / blip: try again
+  }
+  STORY.sending = false;
+}
+function timelineNow() {
+  const tl = STORY.timeline.map(t => ({...t}));
+  if (STORY.cur) tl.push({...STORY.cur, end: audioNow()});
+  return tl;
+}
+function saveTimeline() { if (STORY.sid) post("/api/story/update", {id: STORY.sid, timeline: timelineNow(), marks: STORY.marks}).catch(() => {}); }
+
+function renderLive() {
+  const el = document.createElement("div"); el.className = "story-live"; el.id = "storyLive";
+  el.innerHTML = `<div class="story-bar"><span class="rec" id="sRec">0:00</span><span class="lvl"><i id="sLvl"></i></span>
+      <span class="grow" id="sCount"></span>
+      <button class="btn small" type="button" id="sBack" title="Back (←)">‹ Back</button>
+      <button class="btn small" type="button" id="sPause" title="Pause (Space)">Pause</button>
+      <button class="btn small" type="button" id="sNext" title="Next (→)">Next ›</button>
+      <button class="btn small" type="button" id="sX" title="Not important (X)">Not important</button>
+      <button class="btn primary small" type="button" id="sFinish">Finish</button></div>
+    <div class="story-stage"><div class="collage" id="sCollage"></div><div class="story-cap" id="sCap"></div></div>
+    <div class="story-foot"><div class="story-next"><i id="sNextBar"></i></div>
+      <div class="story-hint"><span><span class="kbd">Space</span> pause</span><span><span class="kbd">←</span> <span class="kbd">→</span> back / next</span>
+      <span><span class="kbd">X</span> not important</span><span id="sState">Listening…</span></div></div>`;
+  document.body.appendChild(el); document.body.style.overflow = "hidden";
+  $("sBack").onclick = () => storyGo(-1); $("sNext").onclick = () => storyGo(1);
+  $("sPause").onclick = togglePause; $("sX").onclick = markSkip; $("sFinish").onclick = finishStory;
+}
+async function eventData(i) {
+  const id = MEM.events[i].id;
+  if (!STORY.cache[id]) STORY.cache[id] = fetch(`/api/memories/event?id=${encodeURIComponent(id)}`).then(r => r.json()).catch(() => null);
+  return STORY.cache[id];
+}
+async function showStoryEvent(pos) {
+  STORY.pos = Math.max(0, Math.min(STORY.order.length - 1, pos));
+  const now = audioNow();
+  if (STORY.cur) { STORY.cur.end = now; if (STORY.cur.end - STORY.cur.start > 0.05) STORY.timeline.push(STORY.cur); }
+  const i = STORY.order[STORY.pos], e = MEM.events[i];
+  STORY.cur = {event_id: e.id, start: now};
+  STORY.shownAt = performance.now(); STORY.lastVoice = STORY.shownAt;
+  $("sCount").textContent = `Event ${STORY.pos + 1} of ${STORY.order.length}`;
+  $("sCollage").className = "collage n1"; $("sCollage").innerHTML = "";
+  $("sCap").innerHTML = `<div class="when">${esc(fmtDate(e.date))}</div><div class="what">${esc(e.time)}${e.place ? " · " + esc(e.place) : ""} · ${esc(e.title)}</div>`;
+  const ev = await eventData(i);
+  if (STORY.order[STORY.pos] !== i || !ev) return;
+  const items = ev.items.slice(0, 6), n = Math.max(1, items.length);
+  $("sCollage").className = `collage n${n}`;
+  let played = false;
+  $("sCollage").innerHTML = items.map((it, k) => {
+    const more = k === items.length - 1 && ev.items.length > 6 ? `<span class="more">+${ev.items.length - 6}</span>` : "";
+    if (it.kind === "video" && !played) { played = true;
+      return `<div class="tile"><video muted autoplay loop playsinline preload="metadata" poster="${thumbUrl(it.thumb)}" src="/api/media/${it.id}"></video>${more}</div>`; }
+    return `<div class="tile"><img src="${thumbUrl(it.thumb)}" alt="">${it.kind === "video" ? '<span class="more">▶</span>' : ""}${more}</div>`;
+  }).join("") || `<div class="tile" style="display:grid;place-items:center;color:#888">${ev.held_back ? "Only photos with people you've hidden" : "No preview"}</div>`;
+  $("sCollage").querySelectorAll("video").forEach(v => v.onerror = () => { v.outerHTML = `<img src="${v.poster}" alt="">`; });
+  const said = ev.items.flatMap(x => x.said).slice(0, 2);
+  $("sCap").innerHTML = `<div class="when">${esc(fmtDate(ev.date))}</div>
+    <div class="what">${esc(ev.time)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length + ev.held_back} photo${ev.items.length + ev.held_back === 1 ? "" : "s"}/video${ev.items.length + ev.held_back === 1 ? "" : "s"}${ev.people_seen.length ? " · with " + esc(ev.people_seen.slice(0, 4).join(", ")) : ""}</div>
+    <div class="what" style="color:rgba(255,255,255,.5)">${esc(ev.items.slice(0, 3).map(x => x.title).filter(Boolean).join(" · "))}${said.length ? " · “" + esc(said[0]) + "”" : ""}</div>`;
+  if (STORY.order[STORY.pos + 1] !== undefined) eventData(STORY.order[STORY.pos + 1]);  // preload the next one
+}
+function storyGo(d) {
+  if (STORY.pos + d >= STORY.order.length) { toast("That was the last event. Press Finish when you're done."); return; }
+  showStoryEvent(STORY.pos + d);
+}
+function markSkip() {
+  if (!STORY.cur) return;
+  STORY.marks[STORY.cur.event_id] = "skip";
+  const t = document.createElement("div"); t.className = "story-skip"; t.textContent = "Marked not important";
+  $("storyLive").appendChild(t); setTimeout(() => t.remove(), 1200);
+  storyGo(1);
+}
+function togglePause() {
+  if (!STORY.rec) return;
+  if (STORY.paused) { STORY.rec.resume(); STORY.runAt = performance.now(); STORY.paused = false; STORY.lastVoice = performance.now(); }
+  else { STORY.acc += performance.now() - STORY.runAt; STORY.rec.pause(); STORY.paused = true; }
+  $("sPause").textContent = STORY.paused ? "Resume" : "Pause";
+  $("sRec").classList.toggle("paused", STORY.paused);
+  $("sState").textContent = STORY.paused ? "Paused: nothing is recorded" : "Listening…";
+}
+function storyLoop() {
+  if (!STORY.live) return;
+  if (STORY.an && !STORY.paused) {
+    const buf = new Uint8Array(STORY.an.fftSize); STORY.an.getByteTimeDomainData(buf);
+    let sum = 0; for (const v of buf) sum += (v - 128) * (v - 128);
+    const rms = Math.sqrt(sum / buf.length);
+    STORY.floor = rms < STORY.floor ? STORY.floor * 0.95 + rms * 0.05 : STORY.floor * 0.999 + rms * 0.001;
+    if (rms > Math.max(3, STORY.floor * 2.5)) STORY.lastVoice = performance.now();
+    $("sLvl").style.width = Math.min(100, rms * 6) + "%";
+  }
+  STORY.raf = requestAnimationFrame(storyLoop);
+}
+function storyTick() {
+  if (!STORY.live) return;
+  const t = Math.round(audioNow()); $("sRec").textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+  if (STORY.paused) { $("sNextBar").style.width = "0"; return; }
+  const quiet = (performance.now() - Math.max(STORY.lastVoice, STORY.shownAt)) / 1000;
+  $("sNextBar").style.width = Math.min(100, quiet / STORY.wait * 100) + "%";
+  if (quiet >= STORY.wait) {
+    if (STORY.pos + 1 < STORY.order.length) showStoryEvent(STORY.pos + 1);
+    else { $("sState").textContent = "That was the last event: press Finish"; STORY.lastVoice = performance.now(); }
+  } else $("sState").textContent = quiet > 1.2 ? `Next in ${Math.ceil(STORY.wait - quiet)}…` : "Listening…";
+}
+async function finishStory() {
+  if (!STORY.live) return;
+  $("sFinish").disabled = true; $("sState").textContent = "Saving the recording…";
+  if (STORY.paused) togglePause();
+  const tl = timelineNow(); STORY.cur = null;
+  await new Promise(res => { STORY.rec.onstop = res; STORY.rec.stop(); });
+  while (STORY.queue.length || STORY.sending) await new Promise(r => setTimeout(r, 300));
+  STORY.live = false; cancelAnimationFrame(STORY.raf); clearInterval(STORY.ticker); clearInterval(STORY.saver);
+  STORY.stream.getTracks().forEach(t => t.stop()); if (STORY.ctx) STORY.ctx.close().catch(() => {});
+  window.removeEventListener("beforeunload", storyBeforeUnload);
+  $("storyLive").remove(); document.body.style.overflow = "";
+  await post("/api/story/finish", {id: STORY.sid, timeline: tl, marks: STORY.marks, mode: STORY.mode});
+  openReview(STORY.sid);
+}
+document.addEventListener("keydown", (e) => {
+  if (!STORY.live || e.target.matches("input, textarea, select")) return;
+  if (e.key === " ") { e.preventDefault(); togglePause(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); storyGo(1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); storyGo(-1); }
+  else if (e.key === "x" || e.key === "X") { e.preventDefault(); markSkip(); }
+});
+
+async function openReview(sid) {
+  STORY.review = sid;
+  $("storyView").innerHTML = `<div class="card" style="text-align:center;padding:48px 24px"><h2 style="margin:0 0 8px">Writing your memories…</h2>
+    <div class="muted" id="rMsg">Starting…</div><div class="progress" style="margin:20px auto 0;max-width:420px"><div style="width:30%"></div></div></div>`;
+  for (;;) {
+    const s = await (await fetch(`/api/story/session?id=${sid}`)).json().catch(() => null);
+    if (!s || s.error) { toast("Couldn't load the session"); STORY.review = null; return renderStorySetup(); }
+    if (s.state === "review") return renderReview(s);
+    if (s.state === "error" || s.state === "recording") {
+      $("storyView").innerHTML = `<div class="notice warn">${esc(s.message || "Something went wrong")}</div>
+        <div class="row-actions"><button class="btn primary" id="rRetry">Try again</button><button class="btn plain" id="rBack">Back</button></div>`;
+      $("rRetry").onclick = async () => { await post("/api/story/finish", {id: sid, mode: STORY.mode}); openReview(sid); };
+      $("rBack").onclick = () => { STORY.review = null; renderStorySetup(); };
+      return;
+    }
+    if ($("rMsg")) $("rMsg").textContent = s.message || "Working…";
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+function renderReview(s) {
+  const drafts = s.drafts || [];
+  const eras = [...new Set(drafts.map(d => d.era).filter(Boolean))];
+  $("storyView").innerHTML = `
+    <div class="mem-head"><div><h1 style="font-size:26px">Check your memories</h1><div class="sub">${esc(s.message || "")}. Change anything that's wrong, then save.</div></div>
+      <div class="row-actions"><button class="btn plain" id="rDiscard">Discard</button><button class="btn primary" id="rSave">Save all</button></div></div>
+    ${drafts.length ? "" : `<div class="empty">Nothing was said in this session.</div>`}
+    <datalist id="rEras">${eras.map(x => `<option value="${esc(x)}">`).join("")}</datalist>
+    ${drafts.map((d, k) => `<div class="card draft${d.content === false ? " off" : ""}" data-k="${k}">
+      ${d.thumb ? `<img src="${thumbUrl(d.thumb)}" alt="">` : "<div></div>"}
+      <div class="f">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(fmtDate(d.date))}${d.place ? " · " + esc(d.place) : ""}</b>
+          <span style="display:flex;gap:14px;flex-wrap:wrap"><label class="check"><input type="checkbox" data-f="content" ${d.content === false ? "" : "checked"}> Use in my videos</label>
+          <label class="check"><input type="checkbox" data-f="save" checked> Save</label></span></div>
+        <textarea data-f="story" aria-label="What happened">${esc(d.story)}</textarea>
+        <input class="field" data-f="meaning" value="${esc(d.meaning)}" placeholder="What it meant (one line)">
+        <div class="row"><input class="field" data-f="feeling" value="${esc(d.feeling)}" placeholder="Feeling">
+          <input class="field" data-f="people" value="${esc((d.people || []).join(", "))}" placeholder="People">
+          <input class="field" data-f="era" list="rEras" value="${esc(d.era)}" placeholder="Chapter of life"></div>
+        <div class="stars" data-imp="${d.importance}">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-n="${n}" class="${n <= d.importance ? "on" : ""}" aria-label="${n} of 5">★</button>`).join("")}
+          ${d.told ? `<details style="margin-left:10px"><summary class="muted" style="font-size:13px;cursor:pointer">What you said</summary><div class="muted" style="font-size:13px;margin-top:6px">${esc(d.told)}</div></details>` : ""}</div>
+      </div></div>`).join("")}
+    ${drafts.length > 3 ? `<div class="row-actions" style="justify-content:flex-end"><button class="btn primary" id="rSave2">Save all</button></div>` : ""}`;
+  $("storyView").querySelectorAll(".stars").forEach(st => st.onclick = (e) => { const b = e.target.closest("button"); if (!b) return;
+    st.dataset.imp = b.dataset.n; st.querySelectorAll("button").forEach(x => x.classList.toggle("on", +x.dataset.n <= +b.dataset.n)); });
+  $("storyView").querySelectorAll('[data-f="content"]').forEach(c => c.onchange = () => c.closest(".draft").classList.toggle("off", !c.checked));
+  const save = async () => {
+    const out = [...$("storyView").querySelectorAll(".draft")].map(el => {
+      const d = {...drafts[+el.dataset.k]}, f = (n) => el.querySelector(`[data-f="${n}"]`);
+      Object.assign(d, {story: f("story").value, meaning: f("meaning").value, feeling: f("feeling").value, era: f("era").value.trim(),
+        people: f("people").value.split(",").map(x => x.trim()).filter(Boolean), content: f("content").checked, save: f("save").checked,
+        importance: +el.querySelector(".stars").dataset.imp});
+      return d; });
+    const j = await (await post("/api/story/approve", {id: s.id, drafts: out})).json();
+    if (!j.ok) { toast(j.error || "Couldn't save"); return; }
+    toast(`${j.saved} memories saved to your Life Vault`);
+    MEM.events = []; STORY.review = null; await loadMemories(); renderStorySetup();
+  };
+  $("rSave").onclick = save; if ($("rSave2")) $("rSave2").onclick = save;
+  $("rDiscard").onclick = async () => { if (!confirm("Discard these drafts? What you said in this session is deleted.")) return;
+    await post("/api/story/discard", {id: s.id}); STORY.review = null; renderStorySetup(); };
+}
 
 /* ------------------------------------------------------------- status */
 const PHASE = {scan: "Finding new files", prep: "Preparing thumbnails", faces: "Finding faces", transcribe: "Transcribing speech",

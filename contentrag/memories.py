@@ -210,11 +210,16 @@ def save_memory(cfg: Config, conn, event_id: str, data: dict) -> dict:
              f"era: {_q(clean(data.get('era')))}", f"people: {_yaml_list(people)}",
              f"feeling: {_q(clean(data.get('feeling')))}", f"importance: {importance or ''}",
              f"content: {'no' if data.get('content') is False else 'yes'}",
-             "source: memories tab", "---", f"# {title}", "",
+             f"source: {clean(data.get('source')) or 'memories tab'}", "---", f"# {title}", "",
              "## What it meant", clean(data.get("meaning")) or "(not told yet)", "",
              "## What happened", clean(data.get("story")) or "(not told yet)", ""]
     if clean(data.get("angle")):
         lines += ["## Content angle", clean(data["angle"]), ""]
+    told = clean(data.get("told"))
+    if told:  # the raw voice transcript (Story mode): kept next to the cleaned version, added to what's there
+        old = next((b for h, b in keep if h == "As told (voice)"), "")
+        keep = [(h, b) for h, b in keep if h != "As told (voice)"] + [
+            ("As told (voice)", f"{old}\n\n{told}".strip() if told not in old else old)]
     for h, b in keep:
         lines += [f"## {h}", b, ""]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +274,25 @@ def _loudest(wav: Path) -> float | None:
     return float("-inf") if m.group(1) == "-inf" else float(m.group(1))
 
 
+def whisper_segments(cfg: Config, wav: Path, mode: str = "auto") -> list[dict]:
+    """[{start, end, text}] for a 16 kHz wav, phantom lines on silence removed."""
+    import mlx_whisper  # type: ignore
+
+    from .transcribe import keep_segment
+
+    kw = {"task": "translate"} if mode == "translate" else {}
+    language = {"hi": "hi", "en": "en"}.get(mode)
+    with _whisper_lock:  # one at a time: the model is big
+        res = mlx_whisper.transcribe(str(wav), path_or_hf_repo=cfg.whisper_model, language=language,
+                                     condition_on_previous_text=False, verbose=None, **kw)
+    out = []
+    for x in res.get("segments", []):
+        text = (x.get("text") or "").strip()
+        if keep_segment(x) and re.sub(r"[^\w\s]", "", text.lower()).strip() not in PHANTOM:
+            out.append({"start": float(x.get("start") or 0), "end": float(x.get("end") or 0), "text": text})
+    return out
+
+
 def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str = "auto") -> str:
     """Speech to text on this Mac. mode: auto | hi (Hindi script) | en | translate (to English).
     The recording stays in a temporary folder on this computer and is deleted right after."""
@@ -289,14 +313,8 @@ def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str
         loud = _loudest(wav)
         if loud is not None and loud < SILENCE_DB:
             raise RuntimeError(SILENT_RECORDING)
-        kw = {"task": "translate"} if mode == "translate" else {}
-        language = {"hi": "hi", "en": "en"}.get(mode)
-        with _whisper_lock:  # one at a time: the model is big
-            res = mlx_whisper.transcribe(str(wav), path_or_hf_repo=cfg.whisper_model, language=language,
-                                         condition_on_previous_text=False, verbose=None, **kw)
-    from .transcribe import keep_segment
-
-    text = " ".join(s["text"].strip() for s in res.get("segments", []) if keep_segment(s)).strip()
-    if re.sub(r"[^\w\s]", "", text.lower()).strip() in PHANTOM:
+        segs = whisper_segments(cfg, wav, mode)
+    text = " ".join(x["text"] for x in segs).strip()
+    if not text or re.sub(r"[^\w\s]", "", text.lower()).strip() in PHANTOM:
         raise RuntimeError(SILENT_RECORDING)
     return text

@@ -6,7 +6,8 @@ description: Interview the creator about a period of their life, using their foo
 # Life interview
 
 Vault: `library_dir/LifeVault` (see `contentrag.toml`). Its `CLAUDE.md` has the rules; read it first.
-The creator can also tell stories on their own in the dashboard's **Memories** tab (`crag ui`):
+The creator can also tell stories on their own in the dashboard's **Memories** tab (`crag ui`), mostly in
+**Story mode** (slideshow + one voice recording, drafts written by AI, `source: story mode`), or one by one:
 events in date order with the photos/videos, voice or typed answers, saved as `Memories/` notes
 (`source: memories tab`). When they've done that, read the new memories and ask only follow-up
 questions (missing people, eras, what came after), then do steps 5-7.

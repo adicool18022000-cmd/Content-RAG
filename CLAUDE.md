@@ -10,6 +10,8 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   `vault.read_memories` and shown on generated event/year notes; `_generated/Interview queue.md`.
   Dashboard Memories tab (`memories.py`): same event ids as the vault, media + voice (local
   mlx-whisper via `/api/transcribe`) → `save_memory` (keeps sections it doesn't manage).
+  Story mode (`story.py`): chunked recording + timeline → whisper segments → `assign` to events →
+  AI drafts (claude-code login, else Gemini, else words as said) → review → `approve` (`library_dir/story/`).
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
 - AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the
