@@ -49,6 +49,8 @@ Write, per event:
   name only if they made it clear (e.g. "School in Patna"), else "".
 - content: false if they said it's not important, private, or not to be used, or said only "skip"; else true.
 - angle: a one-line reel idea only if the story clearly has one; else "".
+The footage list is numbered as on their screen; they may say "photo 3 is..." or "first picture...". about_photo
+is what they said while that numbered photo was open full screen. Use both to understand which picture is which.
 If an event has already_told (what they said about it before), write one story that combines it with the new words.
 Return one entry per event_id you were given."""
 
@@ -126,6 +128,7 @@ def update(cfg: Config, sid: str, timeline: list, marks: dict) -> None:
     with _lock:
         s = load(cfg, sid)
         s["timeline"] = [{"event_id": str(t["event_id"]), "start": float(t["start"]), "end": float(t["end"])}
+                         | ({"item": str(t["item"])} if t.get("item") else {})  # a photo opened full screen
                          for t in timeline if t.get("event_id")]
         s["marks"] = {str(k): str(v) for k, v in (marks or {}).items()}
         _save(cfg, s)
@@ -155,19 +158,32 @@ def discard(cfg: Config, sid: str) -> None:
 
 # ---------------------------------------------------------------- processing
 
+def _entry(seg: dict, timeline: list[dict]) -> dict:
+    """The timeline entry (event, or one photo of it opened full screen) on screen for most of a segment."""
+    a, b = seg["start"], max(seg["end"], seg["start"] + 0.01)
+    best = max(timeline, key=lambda t: (min(b, t["end"]) - max(a, t["start"]),
+                                        -abs((t["start"] + t["end"]) / 2 - (a + b) / 2)))
+    if min(b, best["end"]) - max(a, best["start"]) <= 0:  # said in a gap: what was shown just before
+        before = [t for t in timeline if t["start"] <= a]
+        best = max(before, key=lambda t: t["start"]) if before else timeline[0]
+    return best
+
+
 def assign(segments: list[dict], timeline: list[dict]) -> dict[str, list[str]]:
     """Each spoken segment goes to the event that was on screen for most of it."""
     out: dict[str, list[str]] = {}
-    if not timeline:
-        return out
-    for seg in segments:
-        a, b = seg["start"], max(seg["end"], seg["start"] + 0.01)
-        best = max(timeline, key=lambda t: (min(b, t["end"]) - max(a, t["start"]),
-                                            -abs((t["start"] + t["end"]) / 2 - (a + b) / 2)))
-        if min(b, best["end"]) - max(a, best["start"]) <= 0:  # said in a gap: the event shown just before
-            before = [t for t in timeline if t["start"] <= a]
-            best = max(before, key=lambda t: t["start"]) if before else timeline[0]
-        out.setdefault(best["event_id"], []).append(seg["text"])
+    for seg in segments if timeline else []:
+        out.setdefault(_entry(seg, timeline)["event_id"], []).append(seg["text"])
+    return out
+
+
+def assign_photos(segments: list[dict], timeline: list[dict]) -> dict[str, dict[str, list[str]]]:
+    """{event_id: {media_id: [what was said while that photo was open full screen]}}."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for seg in segments if timeline else []:
+        e = _entry(seg, timeline)
+        if e.get("item"):
+            out.setdefault(e["event_id"], {}).setdefault(e["item"], []).append(seg["text"])
     return out
 
 
@@ -199,7 +215,8 @@ def ai_name(cfg: Config) -> str | None:
 
 def _draft_batch(cfg: Config, ai: str, items: list[dict], context: dict) -> list[dict]:
     prompt = json.dumps({"known_chapters": context["eras"], "known_people": context["people"],
-                         "events": [{k: v for k, v in it.items() if k != "mark"} for it in items]},
+                         "events": [{k: v for k, v in it.items() if k not in ("mark", "thumb", "photos")}
+                                    for it in items]},
                         ensure_ascii=False, indent=1)
     if ai == "claude-code":
         from . import claude_code
@@ -253,6 +270,7 @@ def process(cfg: Config, sid: str, mode: str = "auto") -> dict:
                 segments = whisper_segments(cfg, wav, mode)
             s["segments"] = segments
         said = assign(segments, s["timeline"])
+        by_photo = assign_photos(segments, s["timeline"])
         ids = list(dict.fromkeys([t["event_id"] for t in s["timeline"]]))
         items = []
         for eid in ids:
@@ -262,8 +280,14 @@ def process(cfg: Config, sid: str, mode: str = "auto") -> dict:
             ev = event_detail(cfg, conn, eid)
             if ev is None:
                 continue
+            number = {it["id"]: k + 1 for k, it in enumerate(ev["items"])}
+            photos = [{"media_id": mid, "n": number.get(mid), "said": " ".join(t).strip()}
+                      for mid, t in by_photo.get(eid, {}).items() if mid in number]
             items.append({"event_id": eid, "date": ev["date"], "time": ev["time"], "place": ev["place"],
-                          "footage": [i["title"] for i in ev["items"][:6] if i["title"]],
+                          "footage": [{"n": k + 1, "kind": it["kind"], "time": it["time"], "what": it["title"]}
+                                      for k, it in enumerate(ev["items"][:40])],
+                          "about_photo": [{"n": x["n"], "said": x["said"]} for x in photos],
+                          "photos": photos,
                           "people_seen": ev["people_seen"], "said": text or "(pressed: not important)",
                           "already_told": (ev["memory"] or {}).get("story", ""), "mark": mark,
                           "thumb": next((i["thumb"] for i in ev["items"] if i["thumb"]), None)})
@@ -286,7 +310,7 @@ def process(cfg: Config, sid: str, mode: str = "auto") -> dict:
             drafts += [_fallback(it) for it in batch]
         for d, it in zip(drafts, items):
             d.update(told=it["said"] if it["said"] != "(pressed: not important)" else "", date=it["date"],
-                     time=it["time"], place=it["place"], thumb=it["thumb"])
+                     time=it["time"], place=it["place"], thumb=it["thumb"], photos=it["photos"])
             d["feeling"] = ", ".join(d.get("feeling") or []) if isinstance(d.get("feeling"), list) else d.get("feeling", "")
         s["drafts"] = drafts
         msg = f"{len(drafts)} memories ready to check" + (f" (AI unavailable, your words kept as said: {failed})"
@@ -337,7 +361,8 @@ def approve(cfg: Config, conn, sid: str, drafts: list[dict]) -> dict:
                 "story": d.get("story", ""), "meaning": d.get("meaning", ""), "angle": d.get("angle", ""),
                 "feeling": ", ".join(feeling) if isinstance(feeling, list) else feeling,
                 "importance": d.get("importance") or 0, "people": d.get("people") or [], "era": d.get("era", ""),
-                "content": d.get("content", True) is not False, "told": d.get("told", ""), "source": "story mode"})
+                "content": d.get("content", True) is not False, "told": d.get("told", ""), "source": "story mode",
+                "photos": d.get("photos") or []})
             saved += 1
         except ValueError as e:
             errors.append(f"{d.get('event_id')}: {e}")

@@ -348,6 +348,20 @@ def make_handler(cfg: Config, job: Job):
                     if library not in p.parents or not p.is_file():
                         return self._json({"error": "not found"}, 404)
                     return self._file(p)
+                if url.path.startswith("/api/photo/"):
+                    from .memories import full_photo
+
+                    mid = url.path.rsplit("/", 1)[-1]
+                    if not re.fullmatch(r"[0-9a-f]{20}", mid):
+                        return self._json({"error": "bad id"}, 400)
+                    conn = connect(cfg.db_path)
+                    try:
+                        path = full_photo(cfg, conn, mid)
+                    finally:
+                        conn.close()
+                    if path is None or not path.exists():
+                        return self._json({"error": "not found"}, 404)
+                    return self._file(path)
                 if url.path.startswith("/api/media/"):
                     mid = url.path.rsplit("/", 1)[-1]
                     if not re.fullmatch(r"[0-9a-f]{20}", mid):

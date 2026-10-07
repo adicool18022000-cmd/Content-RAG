@@ -115,6 +115,47 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
             "people_seen": people, "memory": load_memory(cfg, ev), "eras": eras(cfg)}
 
 
+# ---------------------------------------------------------------- full-size photos
+
+FULL_SIDE = 2400
+WEB_IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def full_photo(cfg: Config, conn, media_id: str) -> Path | None:
+    """A browser-viewable, full-size version of a photo for zooming in (originals that browsers can show
+    are served as they are; HEIC/RAW are converted once into library/cache/full). Falls back to the
+    small preview when the drive isn't plugged in."""
+    from . import probe  # noqa: F401  (registers the HEIC opener)
+    from .util import source_path
+
+    src = source_path(cfg, conn, media_id)
+    if src is not None and src.suffix.lower() in WEB_IMAGE and src.stat().st_size < 40_000_000:
+        return src
+    cache = cfg.library_dir / "cache" / "full" / f"{media_id}.jpg"
+    if cache.exists():
+        return cache
+    if src is not None:
+        try:
+            from PIL import Image, ImageOps
+
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(src) as im:
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                im.thumbnail((FULL_SIDE, FULL_SIDE))
+                im.save(cache, "JPEG", quality=88)
+            return cache
+        except Exception:  # noqa: BLE001 - try macOS sips, then the preview
+            import shutil as _sh
+
+            if _sh.which("sips"):
+                subprocess.run(["sips", "-s", "format", "jpeg", "-Z", str(FULL_SIDE), str(src), "--out", str(cache)],
+                               capture_output=True, timeout=120)
+                if cache.exists():
+                    return cache
+    row = conn.execute("SELECT path FROM frames WHERE media_id=? ORDER BY t LIMIT 1", (media_id,)).fetchone()
+    return cfg.library_dir / row["path"] if row else None
+
+
 # ---------------------------------------------------------------- memory notes
 
 def _sections(text: str) -> tuple[dict, list[tuple[str, str]], str]:
@@ -220,6 +261,12 @@ def save_memory(cfg: Config, conn, event_id: str, data: dict) -> dict:
         old = next((b for h, b in keep if h == "As told (voice)"), "")
         keep = [(h, b) for h, b in keep if h != "As told (voice)"] + [
             ("As told (voice)", f"{old}\n\n{told}".strip() if told not in old else old)]
+    photos = [x for x in (data.get("photos") or []) if x.get("said")]
+    if photos:  # what was said about single photos (Story mode, photo opened full screen): for finding them later
+        old = next((b for h, b in keep if h == "About the photos"), "")
+        new = [f"- photo {x.get('n') or '?'} (`{x['media_id']}`): {clean(x['said'])}" for x in photos]
+        rows = old.splitlines() + [x for x in new if x not in old]
+        keep = [(h, b) for h, b in keep if h != "About the photos"] + [("About the photos", "\n".join(rows).strip())]
     for h, b in keep:
         lines += [f"## {h}", b, ""]
     path.parent.mkdir(parents=True, exist_ok=True)

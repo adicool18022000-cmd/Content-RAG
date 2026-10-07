@@ -1418,6 +1418,12 @@ def test_story_mode(env, monkeypatch, tmp_path):
     got = story.assign([{"start": 1, "end": 4, "text": "one"}, {"start": 9, "end": 12.5, "text": "two"},
                         {"start": 15, "end": 16, "text": "three"}, {"start": 30, "end": 31, "text": "late"}], tl)
     assert got == {a: ["one", "three", "late"], b: ["two"]}
+    # a photo opened full screen while talking: those words belong to that photo
+    tl2 = [{"event_id": a, "start": 0, "end": 5}, {"event_id": a, "item": "p3", "start": 5, "end": 9},
+           {"event_id": a, "start": 9, "end": 12}]
+    segs = [{"start": 1, "end": 2, "text": "the trip"}, {"start": 6, "end": 8, "text": "this sign was outside school"}]
+    assert story.assign(segs, tl2) == {a: ["the trip", "this sign was outside school"]}
+    assert story.assign_photos(segs, tl2) == {a: {"p3": ["this sign was outside school"]}}
 
     # a session: chunks (a retry of the same chunk is ignored), timeline, finish -> drafts -> save
     rec = tmp_path / "rec.webm"
@@ -1442,11 +1448,13 @@ def test_story_mode(env, monkeypatch, tmp_path):
     assert "Rahul" in da["story"] and da["content"] and da["told"]
     assert db_["content"] is False  # pressed X; Whisper's phantom "Thank you." was dropped
     assert [x["id"] for x in story.sessions(cfg)] == [s["id"]]
+    out["drafts"][0]["photos"] = [{"media_id": a, "n": 1, "said": "the bike at night"}]
     res = story.approve(cfg, conn, s["id"], out["drafts"])
     assert res["saved"] == 2 and not (cfg.library_dir / "story" / f"{s['id']}.audio").exists()
     note = cfg.vault_dir / memories.event_detail(cfg, conn, a)["memory"]["note"]
     text = note.read_text()
     assert "## As told (voice)" in text and "source: story mode" in text
+    assert "## About the photos" in text and f"photo 1 (`{a}`): the bike at night" in text
     assert memories.event_detail(cfg, conn, b)["memory"]["content"] is False
     assert story.sessions(cfg) == []
 

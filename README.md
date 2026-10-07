@@ -401,7 +401,10 @@ How the vault learns what things meant (the "brain"):
 - **Story mode** (`crag ui` → Memories → Story mode, the fastest way): your events play as a slideshow in
   date order, and you just talk. An event stays on screen while you speak and moves on after a few quiet
   seconds. <kbd>Space</kbd> pauses, <kbd>←</kbd> <kbd>→</kbd> go back or forward, and <kbd>X</kbd> marks
-  it not important. One recording runs for the whole session and is saved to the drive every 3 seconds;
+  it not important. Every photo of the event is on the slide, numbered. Click one to see it full screen
+  (full resolution: zoom with the trackpad or a double-click, drag to move, <kbd>←</kbd> <kbd>→</kbd> other
+  photos, <kbd>Esc</kbd> back). The slideshow waits while it's open, and what you say then is tied to that
+  photo; saying "photo 3 is…" works too. One recording runs for the whole session and is saved to the drive every 3 seconds;
   an interrupted session can be finished later. On **Finish**, Whisper (on your Mac) turns it into text,
   each sentence goes to the event that was on screen, and Claude (your Claude Code login; else Gemini;
   else your words as said) writes each memory: story, what it meant, feeling, importance, people,
