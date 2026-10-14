@@ -116,6 +116,26 @@ def allowed_names(conn, media_id: str) -> list[str]:
         "SELECT DISTINCT name FROM face_reviews WHERE media_id=? AND decision='allow' AND undone=0", (media_id,))]
 
 
+def tagged_here(conn, media_id: str, people: set[str]) -> list[str]:
+    """Hidden people the creator tagged in this photo/video by hand (their face wasn't found, e.g. seen
+    from behind). Such a picture counts as showing them all the way through."""
+    if not people:
+        return []
+    names = [r["name"] for r in conn.execute(
+        "SELECT DISTINCT name FROM face_reviews WHERE media_id=? AND decision='present' AND undone=0", (media_id,))]
+    if not names:
+        return []
+    marks = ",".join("?" * len(people))
+    hidden = {r[0] for r in conn.execute(f"SELECT DISTINCT lower(coalesce(name, 'person ' || id)) FROM people "
+                                         f"WHERE id IN ({marks})", [int(x) for x in people])}
+    return [n for n in names if n and n.lower() in hidden]
+
+
+def skipped_media(conn) -> set[str]:
+    """Photos/videos the creator said not to use in videos (any reason)."""
+    return {r[0] for r in conn.execute("SELECT DISTINCT media_id FROM face_reviews WHERE decision='skip' AND undone=0")}
+
+
 def _except_allowed(conn, media_id: str, people: set[str]) -> set[str]:
     allowed = allowed_here(conn, media_id) if people else set()
     return people - allowed if allowed else people
@@ -127,6 +147,9 @@ def hidden_ranges(conn, media_id: str, people: set[str] | None = None) -> list[t
     people = _except_allowed(conn, media_id, people)
     if not people:
         return []
+    if tagged_here(conn, media_id, people):
+        d = conn.execute("SELECT duration FROM media WHERE id=?", (media_id,)).fetchone()
+        return [(0.0, float((d["duration"] if d else 0) or 0) + FACE_PAD_SECONDS)]
     marks = ",".join("?" * len(people))
     rows = conn.execute(
         f"SELECT t FROM faces WHERE media_id=? AND person_id IN ({marks}) ORDER BY t",
@@ -175,7 +198,7 @@ def hidden_people_in(conn, media_id: str, start: float, end: float, people: set[
         f"SELECT DISTINCT coalesce(p.name, 'person ' || p.id) AS name FROM faces f JOIN people p ON p.id = f.person_id "
         f"WHERE f.media_id=? AND f.person_id IN ({marks}) AND f.t BETWEEN ? AND ? ORDER BY name",
         (media_id, *[int(x) for x in people], start - FACE_PAD_SECONDS, end + FACE_PAD_SECONDS)).fetchall()
-    return [r["name"] for r in rows]
+    return sorted({r["name"] for r in rows} | set(tagged_here(conn, media_id, people)))
 
 
 def frame_box(box: tuple, src_w: int, src_h: int, out_w: int, out_h: int, mode: str | None = "crop") -> tuple | None:
@@ -198,6 +221,8 @@ def photo_has_hidden_person(conn, media_id: str, people: set[str] | None = None)
     people = _except_allowed(conn, media_id, people)
     if not people:
         return False
+    if tagged_here(conn, media_id, people):
+        return True
     marks = ",".join("?" * len(people))
     return conn.execute(f"SELECT 1 FROM faces WHERE media_id=? AND person_id IN ({marks}) LIMIT 1",
                         (media_id, *[int(p) for p in people])).fetchone() is not None

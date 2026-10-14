@@ -83,6 +83,9 @@ def _media_with_hidden_people(conn) -> set[str]:
     for mid in found & _media_with(conn, "allow"):  # allowed there: only counts if someone else hidden is in it
         if not photo_has_hidden_person(conn, mid, hidden):
             found.discard(mid)
+    for mid in _media_with(conn, "present") - found:  # tagged by hand (face not found)
+        if photo_has_hidden_person(conn, mid, hidden):
+            found.add(mid)
     return found
 
 

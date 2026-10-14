@@ -418,7 +418,10 @@ How the vault learns what things meant (the "brain"):
   the face that was recognised and choose: **It's <name>, but OK to use in this memory** (an exception: still
   hidden everywhere else, usable here, teal frame), **It's not <name>**, or **It's someone else…** (tick
   "all pictures of this day" to do it at once). Every decision stays visible (blue dashed = checked) with
-  **Undo**, and **Who's in this picture?** lets you name any face, also to put back a tag removed by mistake. **Re-check all tags** (or `crag people recheck`) moves every
+  **Undo**, and **Who's in this picture?** lets you name any face, also to put back a tag removed by mistake.
+  Under every picture: **Someone you hid is in this picture but wasn't recognised?** (seen from behind, too
+  small...) pick them and **Tag & skip this picture**: only that one is skipped, the rest of the day stays
+  usable. **Don't use this picture** keeps any one picture out of videos (grey), still in your memories. **Re-check all tags** (or `crag people recheck`) moves every
   face that looks more like someone else (you, a friend) away from the hidden person in one go.
   Events with photos/videos of people you've hidden are yellow in the One by one timeline (filter: *With
   hidden people*). Story mode leaves those pictures out, but here you can review them (yellow frame, with

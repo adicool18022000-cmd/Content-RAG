@@ -521,6 +521,31 @@ def allow_hidden(conn, media_ids: list[str], person: str) -> dict:
     return {"allowed": done}
 
 
+def tag_present(conn, media_ids: list[str], person: str) -> dict:
+    """"Someone I hid is in this picture" when their face wasn't found (seen from behind, too small...):
+    the picture is then treated as showing them. Undoable."""
+    done = 0
+    for mid in media_ids:
+        if not conn.execute("SELECT 1 FROM face_reviews WHERE media_id=? AND decision='present' AND undone=0 "
+                            "AND lower(name)=lower(?)", (mid, person)).fetchone():
+            _log(conn, mid, person, "present")
+            done += 1
+    conn.commit()
+    return {"tagged": done}
+
+
+def skip_media(conn, media_ids: list[str]) -> dict:
+    """"Don't use this picture in videos" (any reason). It stays in your memories. Undoable."""
+    done = 0
+    for mid in media_ids:
+        if not conn.execute("SELECT 1 FROM face_reviews WHERE media_id=? AND decision='skip' AND undone=0",
+                            (mid,)).fetchone():
+            _log(conn, mid, None, "skip")
+            done += 1
+    conn.commit()
+    return {"skipped": done}
+
+
 def undo_review(conn, review_id: int) -> dict:
     import json
 

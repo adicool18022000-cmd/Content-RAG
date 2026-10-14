@@ -124,6 +124,9 @@ def resolve_item(cfg: Config, conn, item: dict, handles: float = HANDLES) -> dic
     if str(row["id"]) in hidden["moment"] or row["media_id"] in hidden["media"] \
             or collection_hidden(row["collection"], hidden["collection"]):
         raise ValueError("this clip is on the hide list")
+    if conn.execute("SELECT 1 FROM face_reviews WHERE media_id=? AND decision='skip' AND undone=0",
+                    (row["media_id"],)).fetchone():
+        raise ValueError("you chose not to use this picture in videos")
     off = conn.execute("SELECT memory FROM content_off WHERE media_id=?", (row["media_id"],)).fetchone()
     if off:
         raise ValueError(f"you marked this memory as not for content ({off['memory']})")

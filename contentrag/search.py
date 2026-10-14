@@ -147,6 +147,10 @@ def search(cfg: Config, conn, query: str = "", filters: Filters | None = None, l
     ranges_cache: dict[str, list] = {}
     # clips of memories the creator marked "not for content"
     off = set() if filters.include_hidden else {x[0] for x in conn.execute("SELECT media_id FROM content_off")}
+    if not filters.include_hidden:
+        from .usage import skipped_media
+
+        off |= skipped_media(conn)  # "don't use this picture"
     for r in rows:
         if r["media_id"] in off:
             continue

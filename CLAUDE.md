@@ -33,7 +33,9 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   name (groups are never merged; `split_person` re-separates one); hidden people are removed by time
   range, never by dropping whole clips. Wrong hidden tags: `faces.retag_faces` / `recheck_hidden` / `name_faces` (dense matches must
   also beat every non-hidden group); every decision goes to `face_reviews` (undoable). `decision='allow'` =
-  hidden person allowed in that photo/video (`usage.allowed_here`, honoured by all hidden-range helpers). A held-back moment (`search --held-back`) is used only when
+  hidden person allowed in that photo/video (`usage.allowed_here`, honoured by all hidden-range helpers). `'present'` =
+  hidden person tagged by hand (no face found; whole item counts, `usage.tagged_here`); `'skip'` = not for videos
+  (search/pull). A held-back moment (`search --held-back`) is used only when
   the creator asks in chat; their face is then a blur layer in HyperFrames/Remotion (+ preview), never
   burned into footage or pulled clips.
 - Edit engine (`contentrag/edit/`): one `EditPlan` (plan.py) built by `talking.py` / `beat.py`,

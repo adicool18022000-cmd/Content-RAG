@@ -770,6 +770,26 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
     assert not hidden_ranges(conn, goa)
     lost = [f for f in media_faces(conn, goa) if not f["hidden"]]
     assert lost and name_faces(cfg, conn, [lost[0]["id"]], "Ex")["moved"] == 1 and hidden_ranges(conn, goa)
+    # tagging her by hand where no face was found (seen from behind): only that clip is skipped
+    from contentrag.faces import skip_media, tag_present
+
+    other = conn.execute("SELECT md.id FROM media md JOIN locations l ON l.media_id=md.id "
+                         "WHERE l.relpath LIKE '2023/VID_%'").fetchone()["id"]
+    assert not hidden_ranges(conn, other)
+    vids = lambda: {r["media_id"] for r in search(cfg, conn, "", Filters(kind="video"), use_vectors=False, limit=200)}  # noqa: E731
+    assert other in vids()
+    tag_present(conn, [other], "Ex")
+    assert hidden_ranges(conn, other)[0][0] == 0.0 and other not in vids()
+    assert next(r for r in reviews_for(conn, other) if r["decision"] == "present")
+    undo_review(conn, next(r["id"] for r in reviews_for(conn, other) if r["decision"] == "present"))
+    assert other in vids()
+    # "don't use this picture" (any reason): out of search and pull, still in memories
+    skip_media(conn, [other])
+    assert other not in vids()
+    mo_other = conn.execute("SELECT id FROM moments WHERE media_id=?", (other,)).fetchone()["id"]
+    assert pull(cfg, conn, [mo_other], "skipped", log=lambda *_: None)["skipped"]
+    undo_review(conn, next(r["id"] for r in reviews_for(conn, other) if r["decision"] == "skip"))
+    assert other in vids()
 
     # photos with a hidden person never appear
     photo = conn.execute("SELECT id FROM media WHERE kind='photo' LIMIT 1").fetchone()["id"]

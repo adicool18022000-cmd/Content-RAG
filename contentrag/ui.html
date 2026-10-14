@@ -382,6 +382,18 @@ summary::-webkit-details-marker { display: none; }
 .strip button.ck::after { content: "checked"; background: #0a84ff; }
 .mem-ev.ok { background: rgba(48, 176, 199, .12); box-shadow: inset 3px 0 0 #30b0c7; }
 .mem-ev .okt { color: #1d8ea3; font-weight: 600; }
+.tagbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; color: var(--secondary); }
+.tagbar .field { height: 30px; font-size: 13px; max-width: 200px; }
+.tagbar.dark { color: rgba(255,255,255,.7); }
+.tagbar.dark .field { background: rgba(255,255,255,.12); color: #fff; }
+.tagbar.dark .btn { background: rgba(255,255,255,.14); color: #fff; }
+.facefix.sk { background: rgba(142, 142, 147, .14); border-color: rgba(142, 142, 147, .45); }
+.collage .tile.sk { outline: 3px solid #8e8e93; outline-offset: -3px; }
+.collage .tile.sk img, .strip button.sk img { opacity: .55; }
+.collage .hpl.sk { background: #8e8e93; color: #fff; }
+.strip button.sk { border-color: #8e8e93; }
+.strip button.sk::after { content: "not used"; position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 600;
+  border-radius: 5px; padding: 0 4px; color: #fff; background: #8e8e93; }
 .lb-fix { padding: 10px 16px 14px; max-height: 42vh; overflow-y: auto; }
 .lb-fix:empty { display: none; }
 .collage .tile.hp { outline: 3px solid #ffcc00; outline-offset: -3px; }
@@ -1064,11 +1076,13 @@ function renderStorySlide(ev) {
 }
 // yellow = recognised as someone you hid; teal = you allowed them in this memory; blue dashed = you checked it
 const mark = (it) => it.hidden_people && it.hidden_people.length ? "hp"
+  : (it.reviews || []).some(r => r.decision === "skip") ? "sk"
   : (it.reviews || []).some(r => r.decision === "allow") ? "ok" : (it.reviews || []).length ? "ck" : "";
 const hp = (it) => mark(it) ? " " + mark(it) : "";
 const hpl = (it) => { const m = mark(it); if (!m) return "";
   const txt = m === "hp" ? "Hidden: " + it.hidden_people.join(", ")
-    : m === "ok" ? "Allowed: " + [...new Set(it.reviews.filter(r => r.decision === "allow").map(r => r.name))].join(", ") : "Checked";
+    : m === "ok" ? "Allowed: " + [...new Set(it.reviews.filter(r => r.decision === "allow").map(r => r.name))].join(", ")
+    : m === "sk" ? "Not used in videos" : "Checked";
   return `<span class="hpl ${m}">${esc(txt)}</span>`; };
 function storyGo(d) {
   if (STORY.pos + d >= STORY.order.length) { toast("That was the last event. Press Finish when you're done."); return; }
@@ -1289,11 +1303,14 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => { if (LB.open) lbFit(); });
 
 /* ------------------------------------------------------------- fix a wrong "hidden person" tag */
-let PEOPLE_NAMES = null;
+let PEOPLE_NAMES = null, HIDDEN_NAMES = [];
 async function peopleNames() {
   if (!PEOPLE_NAMES) {
-    try { const j = await (await fetch("/api/people?min=1")).json(); PEOPLE_NAMES = (j.persons || []).filter(p => !p.hidden).map(p => p.name); }
+    try { const j = await (await fetch("/api/people?min=1")).json(); PEOPLE_NAMES = (j.persons || []).filter(p => !p.hidden).map(p => p.name);
+          HIDDEN_NAMES = (j.persons || []).filter(p => p.hidden).map(p => p.name); }
     catch (e) { PEOPLE_NAMES = []; }
+    document.querySelectorAll("[data-hidden-pick]").forEach(sel => { if (sel.options.length <= 1)
+      sel.innerHTML = `<option value="">Someone you hid…</option>` + HIDDEN_NAMES.map(n => `<option>${esc(n)}</option>`).join(""); });
     let dl = $("peopleList"); if (!dl) { dl = document.createElement("datalist"); dl.id = "peopleList"; document.body.appendChild(dl); }
     dl.innerHTML = PEOPLE_NAMES.map(n => `<option value="${esc(n)}">`).join("");
   }
@@ -1322,6 +1339,13 @@ function faceFixHtml(it, evItems, dark) {
   }
   // 2. what you decided here before (undoable)
   for (const r of it.reviews || []) {
+    if (r.decision === "present" || r.decision === "skip") {
+      html += `<div class="facefix ${r.decision === "present" ? "" : "sk"}${d}"><div class="ff-body"><div>${r.decision === "present"
+        ? `You tagged <b>${esc(r.name)}</b> in this picture, so it's skipped in your videos. The rest of this day stays usable.`
+        : "You chose not to use this picture in videos. It stays in your memories."}</div></div>
+        <button class="btn small" type="button" data-act="undo" data-review="${r.id}">Undo</button></div>`;
+      continue;
+    }
     const txt = r.decision === "allow" ? `<b>${esc(r.name)}</b> is in this picture. You allowed it for this memory, so it can be used (${esc(r.name)} stays hidden everywhere else).`
       : r.decision === "auto" ? `Checked automatically: not <b>${esc(r.name)}</b> (looked more like someone else).`
       : r.decision === "renamed" ? `You tagged a face here as <b>${esc(r.new_name)}</b>${r.name ? ` (it was ${esc(r.name)})` : ""}.`
@@ -1329,7 +1353,15 @@ function faceFixHtml(it, evItems, dark) {
     html += `<div class="facefix ${r.decision === "allow" ? "ok" : "ck"}${d}"><div class="ff-body"><div>${txt}</div></div>
       <button class="btn small" type="button" data-act="undo" data-review="${r.id}">Undo</button></div>`;
   }
-  // 3. every face in it: name it, or put a lost tag back
+  // 3. tag a hidden person by hand (face not found), or keep this one picture out of videos
+  const tagged = (it.reviews || []).filter(r => r.decision === "present").map(r => r.name.toLowerCase());
+  const skipped = (it.reviews || []).some(r => r.decision === "skip");
+  html += `<div class="tagbar${d}" data-mid="${it.id}">
+    <span>Someone you hid is in this picture but wasn't recognised?</span>
+    <select class="field" data-hidden-pick aria-label="Who"><option value="">Someone you hid…</option>${HIDDEN_NAMES.filter(n => !tagged.includes(n.toLowerCase())).map(n => `<option>${esc(n)}</option>`).join("")}</select>
+    <button class="btn small" type="button" data-act="present">Tag &amp; skip this picture</button>
+    ${skipped ? "" : `<span class="muted">or</span><button class="btn small plain" type="button" data-act="skip">Don't use this picture</button>`}</div>`;
+  // 4. every face in it: name it, or put a lost tag back
   if ((it.faces || []).length) {
     html += `<details class="whois${d}"><summary>Who's in this picture? (${it.faces.length} face${it.faces.length === 1 ? "" : "s"})</summary>
       <div class="whois-list">${it.faces.map(f => `<div class="whois-face" data-face="${f.id}">
@@ -1340,10 +1372,16 @@ function faceFixHtml(it, evItems, dark) {
   return html;
 }
 document.addEventListener("click", async (e) => {
-  const b = e.target.closest(".facefix [data-act], .whois [data-act]"); if (!b) return;
+  const b = e.target.closest(".facefix [data-act], .whois [data-act], .tagbar [data-act]"); if (!b) return;
   const act = b.dataset.act, items = LB.open ? LB.items : (MEM.ev ? MEM.ev.items : []);
   let url, body, msg;
   if (act === "undo") { url = "/api/faces/undo"; body = {review_id: +b.dataset.review}; msg = "Undone"; }
+  else if (act === "present" || act === "skip") {
+    const bar = b.closest(".tagbar"), who = bar.querySelector("[data-hidden-pick]").value;
+    if (act === "present" && !who) { toast("Pick who is in it first"); return; }
+    url = `/api/faces/${act}`; body = {media_ids: [bar.dataset.mid], person: who};
+    msg = act === "present" ? `Tagged ${who}: this picture is skipped, the rest of the day stays usable` : "This picture won't be used in videos";
+  }
   else if (act === "name") {
     const f = b.closest("[data-face]"), n = f.querySelector("[data-new]").value.trim();
     if (!n) { toast("Type who it is first"); return; }
