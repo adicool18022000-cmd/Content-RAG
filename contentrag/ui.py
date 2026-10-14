@@ -25,7 +25,8 @@ from .db import connect, failures
 from .util import source_path
 
 HTML = Path(__file__).with_name("ui.html")
-STEPS = ("hide_person", "scan", "prep", "faces", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull")
+STEPS = ("hide_person", "scan", "prep", "faces", "transcribe", "describe", "retry", "embed", "vault", "all", "autopilot", "pull",
+         "repair_memories")
 
 
 class Job:
@@ -63,6 +64,17 @@ class Job:
         try:
             if step == "autopilot":
                 Autopilot(self.cfg, log=self.log, stop=self.stop, hours=self.hours).run()
+                return
+            if step == "repair_memories":  # only the vault notes: fine next to an Autopilot in the terminal
+                from .memory_repair import repair
+
+                conn = connect(self.cfg.db_path, threads=True)
+                try:
+                    self.log("[ui] ── repair memories ──")
+                    result = repair(self.cfg, conn, log=self.log, stop=self.stop)
+                    self.log(f"[ui] repair_memories finished: {json.dumps(result, ensure_ascii=False, default=str)}")
+                finally:
+                    conn.close()
                 return
             with pipeline_lock(self.cfg):
                 conn = connect(self.cfg.db_path)
@@ -340,7 +352,7 @@ def make_handler(cfg: Config, job: Job):
                     from . import story
 
                     try:
-                        return self._json(story.load(cfg, qs.get("id", "")))
+                        return self._json(story.info(cfg, qs.get("id", "")))
                     except ValueError as e:
                         return self._json({"error": str(e)}, 404)
                 if url.path == "/api/thumb":
@@ -475,7 +487,20 @@ def make_handler(cfg: Config, job: Job):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 conn = connect(cfg.db_path)
                 try:
+                    for k in ("absorb", "extra_sections"):  # only for move_memory, never from the page
+                        body.pop(k, None)
                     return self._json(save_memory(cfg, conn, str(body.get("id") or ""), body))
+                except ValueError as e:
+                    return self._json({"error": str(e)}, 400)
+                finally:
+                    conn.close()
+            if url.path == "/api/memories/move":
+                from .memories import move_memory
+
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                conn = connect(cfg.db_path)
+                try:
+                    return self._json(move_memory(cfg, conn, str(body.get("from") or ""), str(body.get("to") or "")))
                 except ValueError as e:
                     return self._json({"error": str(e)}, 400)
                 finally:
@@ -522,9 +547,10 @@ def make_handler(cfg: Config, job: Job):
                 audio = self.rfile.read(length)
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0]
                 suffix = {"audio/mp4": ".m4a", "audio/ogg": ".ogg", "audio/wav": ".wav"}.get(ctype, ".webm")
-                mode = parse_qs(url.query).get("mode", ["auto"])[-1]
+                q = parse_qs(url.query)
+                mode, event = q.get("mode", ["mixed"])[-1], q.get("event", [""])[-1] or None
                 try:
-                    return self._json({"text": transcribe_audio(cfg, audio, suffix, mode)})
+                    return self._json({"text": transcribe_audio(cfg, audio, suffix, mode, event)})
                 except RuntimeError as e:
                     return self._json({"error": str(e)}, 501)
             if url.path == "/api/stop":
@@ -558,7 +584,8 @@ def make_handler(cfg: Config, job: Job):
                 if url.path == "/api/story/finish":
                     s = story.load(cfg, sid)
                     return self._json(story.finish(cfg, sid, body.get("timeline") or s["timeline"],
-                                                   body.get("marks") or s["marks"], str(body.get("mode") or "auto")))
+                                                   body.get("marks") or s["marks"], str(body.get("mode") or "mixed"),
+                                                   redo=bool(body.get("redo"))))
                 if url.path == "/api/story/approve":
                     conn = connect(cfg.db_path)
                     try:

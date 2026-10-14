@@ -44,6 +44,11 @@ creator knows.
 
 When the user asks to check or clean their memories (e.g. "review my memories till 2019"):
 
+0. First run `crag memories repair --dry-run` and read `LifeVault/_generated/Memory repair.md`: it finds
+   voice-to-text damage (wrong scripts/languages, loops, "foreign", invented "Thank you."), long tellings
+   saved as a short summary, memories to tell again and stories on the wrong event. If it finds damage,
+   suggest `crag memories repair` (or *Check & repair* in the dashboard) before editing by hand. Never
+   use facts from `## Earlier versions (voice-to-text errors)`.
 1. Read `Memories/**/*.md` for that period (skip `_merged/` and the template), oldest first,
    with each note's event note for context.
 2. Fix voice-to-text problems without changing what they meant: misheard words, broken

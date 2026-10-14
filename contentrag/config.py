@@ -33,6 +33,7 @@ class Config:
     roots: list[Root]
     timezone: str = "Asia/Kolkata"
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
+    memory_whisper_model: str = "mlx-community/whisper-large-v3-mlx"  # your spoken memories: slower, better Hindi
     language: str = "hi"
     transcribe_enabled: bool = True
     backend: str = "gemini"  # gemini | claude (API key) | claude-code (Claude subscription)
@@ -135,6 +136,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         roots=roots,
         timezone=raw.get("timezone", "Asia/Kolkata"),
         whisper_model=t.get("model", Config.whisper_model),
+        memory_whisper_model=t.get("memory_model", Config.memory_whisper_model),
         language=t.get("language", Config.language),
         transcribe_enabled=bool(t.get("enabled", Config.transcribe_enabled)),
         backend=backend,

@@ -40,6 +40,9 @@ enabled = false
 # large-v3 with similar Hindi quality.
 model = "mlx-community/whisper-large-v3-turbo"
 language = "hi"
+# Your spoken memories (Story mode, Speak buttons): the full large-v3 model, slower but much
+# better at Hindi/Hinglish and names. Downloaded once (~3 GB). Falls back to `model` if missing.
+memory_model = "mlx-community/whisper-large-v3-mlx"
 
 [describe]
 # Which AI watches the footage:

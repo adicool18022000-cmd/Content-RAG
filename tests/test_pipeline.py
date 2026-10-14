@@ -1455,16 +1455,25 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
     cfg, _ = env
     seen = {}
 
-    def fake_transcribe(path, **kw):
-        seen.update(kw, path=path)
-        return {"segments": [{"text": " Goa wali trip ", "no_speech_prob": 0.01}]}
+    def fake_transcribe(audio, path_or_hf_repo=None, initial_prompt=None, **kw):
+        seen.update(kw, audio=audio, prompt=initial_prompt, model=path_or_hf_repo)
+        return {"segments": [{"text": " Goa wali trip ", "no_speech_prob": 0.01, "start": 0, "end": 1}]}
 
     monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=fake_transcribe))
+    cfg.library_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.library_dir / "vocabulary.txt").write_text("# my words\nMania -> Manya\nJEE Advanced\n")
     rec = tmp_path / "rec.webm"  # what Chrome's MediaRecorder sends
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:d=1", "-c:a", "libopus", str(rec)],
                    check=True)
     assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "translate") == "Goa wali trip"
-    assert seen["task"] == "translate" and seen["language"] is None and seen["path"].endswith(".wav")
+    # the language is always set (guessing it turned Hinglish into Korean), your words are the prompt
+    assert seen["task"] == "translate" and seen["language"] == "hi" and seen["audio"].dtype.name == "float32"
+    assert "Manya" in seen["prompt"] and "JEE Advanced" in seen["prompt"]
+    assert seen["model"] == cfg.memory_whisper_model
+    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "auto")  # old setting: Hindi + English
+    assert seen["language"] == "hi" and seen["task"] == "transcribe"
+    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "en")
+    assert seen["language"] == "en"
     with pytest.raises(RuntimeError, match="empty"):
         memories.transcribe_audio(cfg, b"not audio", ".webm")
     with pytest.raises(RuntimeError, match="empty"):  # cut off mid-file (what the screenshot showed)
@@ -1474,10 +1483,74 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
                     "-c:a", "libopus", str(quiet)], check=True)
     with pytest.raises(RuntimeError, match="couldn't hear"):
         memories.transcribe_audio(cfg, quiet.read_bytes(), ".webm")
-    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(
-        transcribe=lambda path, **kw: {"segments": [{"text": " Thank you."}]}))
-    with pytest.raises(RuntimeError, match="couldn't hear"):  # Whisper's phantom line on noise
-        memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
+    for junk in (" Thank you.", " 안녕하세요 여러분 감사합니다", " foreign foreign"):  # invented / wrong script
+        monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(
+            transcribe=lambda audio, junk=junk, **kw: {"segments": [{"text": junk, "start": 0, "end": 1}]}))
+        with pytest.raises(RuntimeError, match="couldn't hear"):
+            memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
+
+    # the big model can't be loaded (no internet the first time): the normal one is used
+    from contentrag import voice
+
+    calls = []
+
+    def flaky(audio, path_or_hf_repo=None, **kw):
+        calls.append(path_or_hf_repo)
+        if path_or_hf_repo == cfg.memory_whisper_model:
+            raise OSError("can't download")
+        return {"segments": [{"text": "phir hum ghar aaye", "start": 0, "end": 1}]}
+
+    voice._model_ok.clear()
+    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=flaky))
+    assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm") == "phir hum ghar aaye"
+    assert calls == [cfg.memory_whisper_model, cfg.whisper_model]
+    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
+    assert calls[-1] == cfg.whisper_model and len(calls) == 3  # not tried again
+    voice._model_ok.clear()
+
+
+def test_voice_cleanup():
+    import numpy as np
+
+    from contentrag import voice
+
+    text = ("Hum log Varanasi gaye the. 저는 그곳에 갔습니다 그리고 친구들과. Then we went to the ghat. Thank you.\n\n"
+            "and then we went and then we went and then we went and then we went to see the aarti. "
+            "Poi siamo andati a casa e non sono stato molto bene questo giorno. Foreign. My foreign trip was fun.")
+    clean, st = voice.clean_text(text)
+    assert clean == ("Hum log Varanasi gaye the. [unclear] Then we went to the ghat.\n\n"
+                     "and then we went to see the aarti. [unclear] My foreign trip was fun.")
+    assert st["phantom"] == 1 and st["lost"] > 15 and st["loops"] == 12 and st["tags"] == 1 and voice.damaged(st)
+    fine, st2 = voice.clean_text("हम लोग बनारस गए थे, वहाँ बहुत मज़ा आया। Then we came back. Very very nice.")
+    assert fine.endswith("Very very nice.") and not voice.damaged(st2)
+    assert voice.collapse_loops("bahut bahut maza") == ("bahut bahut maza", 0)
+    assert not voice.drifted("we went to the cafe for coffee and pasta with Prachi")
+    assert voice.drifted("Ich bin nicht sehr müde und wir haben noch Zeit")
+    segs = [{"start": 0, "end": 2, "text": " Thank you."}, {"start": 2, "end": 4, "text": "Manya, Prachi, Atul, Purnia"},
+            {"start": 4, "end": 6, "text": "मैं कॉलेज गया"}, {"start": 6, "end": 8, "text": "मैं कॉलेज गया"},
+            {"start": 8, "end": 9, "text": "안녕하세요 여러분"}, {"start": 9, "end": 10, "text": "Привет как дела"},
+            {"start": 10, "end": 11, "text": "ok so then", "no_speech_prob": 0.9, "avg_logprob": -1.2}]
+    out = voice.clean_segments(segs, {"manya", "prachi", "atul", "purnia"})  # its prompt repeated back: dropped
+    assert out == [{"start": 4.0, "end": 8.0, "text": "मैं कॉलेज गया"}, {"start": 8.0, "end": 10.0, "text": "[unclear]"}]
+
+    vocab = {"terms": ["Manya", "IIT"], "people": ["Rahul", "Manya"], "places": ["Patna"] * 1 + ["Goa"], "folders": []}
+    prompt = voice.prompt_for(vocab, ["Varanasi"])
+    assert prompt.index("Patna") < prompt.index("Rahul") < prompt.index("IIT") < prompt.index("Varanasi")
+    assert prompt.count("Manya") == 1
+    long = voice.prompt_for({"terms": [f"word{i}" for i in range(300)]}, ["Varanasi"])
+    assert len(long) <= 701 and long.endswith("Varanasi.")  # Whisper keeps the end of a long prompt
+
+    sr = voice.SR
+    tone = lambda sec: (0.3 * np.sin(np.arange(int(sec * sr)) * 2 * np.pi * 220 / sr)).astype("float32")  # noqa: E731
+    gap = lambda sec: np.zeros(int(sec * sr), "float32")  # noqa: E731
+    audio = np.concatenate([gap(1), tone(3), gap(1), tone(2), gap(8), tone(4), gap(1)])
+    pieces = voice.speech_pieces(audio)
+    assert len(pieces) == 2 and pieces[0][0] < 1 and 5.9 < pieces[0][1] < 7.6 and 14.5 < pieces[1][0] < 15.1
+    assert voice.speech_pieces(gap(5)) == []
+    talk = np.concatenate([np.concatenate([tone(2.5), gap(0.3)]) for _ in range(25)])  # 70 s, short breaths only
+    pieces = voice.speech_pieces(talk)
+    assert len(pieces) >= 3 and all(b - a <= voice.MAX_PIECE + 0.01 for a, b in pieces)
+    assert abs(voice.quiet_point(audio, 4.5) - 4.5) < 0.8 and audio[int(voice.quiet_point(audio, 4.5) * sr)] == 0
 
 
 def test_story_mode(env, monkeypatch, tmp_path):
@@ -1513,24 +1586,43 @@ def test_story_mode(env, monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         story.append_chunk(cfg, s["id"], 5, b"x")
     assert story.load(cfg, s["id"])["bytes"] == len(data)
-    segments = [{"start": 0.5, "end": 2.5, "text": " Goa trip with Rahul, first trip I planned myself, bahut maza aaya."},
-                {"start": 4.0, "end": 5.0, "text": " Thank you."}]
-    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=lambda path, **kw: {"segments": segments}))
+    calls = []
+
+    def whisper(audio, initial_prompt=None, **kw):  # each event's part of the recording on its own
+        calls.append((len(audio) / 16000, initial_prompt, kw["language"]))
+        if len(audio) > 3 * 16000:
+            return {"segments": [{"start": 0.5, "end": 2.5, "text": " Goa trip with Rahul, first trip I planned "
+                                                                    "myself, bahut maza aaya."}]}
+        return {"segments": [{"start": 0.1, "end": 0.9, "text": " Thank you."}]}
+
+    monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=whisper))
     monkeypatch.setattr(story, "ai_name", lambda cfg: None)  # no AI: their words are kept as said
-    story.update(cfg, s["id"], [{"event_id": a, "start": 0, "end": 3.5}, {"event_id": b, "start": 3.5, "end": 6}], {b: "skip"})
+    (cfg.library_dir / "vocabulary.txt").write_text("Rahul\n")
+    story.update(cfg, s["id"], [{"event_id": a, "start": 0, "end": 4}, {"event_id": b, "start": 4, "end": 6}], {b: "skip"})
     out = story.process(cfg, s["id"])
     assert out["state"] == "review" and [d["event_id"] for d in out["drafts"]] == [a, b]
+    assert len(calls) == 2 and all(c[2] == "hi" for c in calls) and 3.2 < calls[0][0] < 4.8
+    assert all("Rahul" in c[1] for c in calls)  # every part gets the vocabulary prompt
+    assert out["voice"] == story.VOICE_VERSION and all(x["event_id"] in (a, b) for x in out["segments"])
     da, db_ = out["drafts"]
-    assert "Rahul" in da["story"] and da["content"] and da["told"]
+    assert "Rahul" in da["story"] and da["content"] and da["told"] and da["told_on"] == a and da["spans"] == [[0, 4]]
+    assert da["nearby"] and any(x["id"] == b for x in da["nearby"])
     assert db_["content"] is False  # pressed X; Whisper's phantom "Thank you." was dropped
-    assert [x["id"] for x in story.sessions(cfg)] == [s["id"]]
+    assert [x["id"] for x in story.sessions(cfg)] == [s["id"]] and not story.sessions(cfg)[0]["outdated"]
+    story.process(cfg, s["id"])
+    assert len(calls) == 2  # already transcribed: not done again
     out["drafts"][0]["photos"] = [{"media_id": a, "n": 1, "said": "the bike at night"}]
+    out["drafts"][0]["questions"] = ["Who is Rahul?"]
     res = story.approve(cfg, conn, s["id"], out["drafts"])
     assert res["saved"] == 2 and not (cfg.library_dir / "story" / f"{s['id']}.audio").exists()
+    kept = list((cfg.library_dir / "story" / "audio").glob(f"* {s['id']}.webm"))
+    assert len(kept) == 1  # the recording is kept, so it can be transcribed again later
     note = cfg.vault_dir / memories.event_detail(cfg, conn, a)["memory"]["note"]
     text = note.read_text()
     assert "## As told (voice)" in text and "source: story mode" in text
     assert "## About the photos" in text and f"photo 1 (`{a}`): the bike at night" in text
+    assert "## Open questions\n- Who is Rahul?" in text
+    assert f"## Recordings\n- `story/audio/{kept[0].name}` at 0:00–0:04" in text
     assert memories.event_detail(cfg, conn, b)["memory"]["content"] is False
     assert story.sessions(cfg) == []
 
@@ -1538,7 +1630,7 @@ def test_story_mode(env, monkeypatch, tmp_path):
     def fake_ai(cfg, ai, items, context):
         return [{"event_id": it["event_id"], "story": "I went to Goa with Rahul.", "meaning": "My first own trip.",
                  "feeling": ["free"], "importance": 9, "people": ["Rahul"], "era": "College", "content": True,
-                 "angle": ""} for it in items]
+                 "angle": "", "questions": []} for it in items]
     monkeypatch.setattr(story, "ai_name", lambda cfg: "gemini")
     monkeypatch.setattr(story, "_draft_batch", lambda cfg, ai, items, context: [
         dict(d, content=d["content"] and it.get("mark") != "skip", importance=min(5, d["importance"]))
@@ -1548,3 +1640,118 @@ def test_story_mode(env, monkeypatch, tmp_path):
     story.update(cfg, s2["id"], [{"event_id": a, "start": 0, "end": 6}], {})
     d2 = story.process(cfg, s2["id"])["drafts"][0]
     assert d2["story"] == "I went to Goa with Rahul." and d2["feeling"] == "free" and d2["importance"] == 5
+
+    # told on the wrong slide: 'Belongs to' moves it; it's combined with the memory already there
+    d2["event_id"] = b
+    assert story.approve(cfg, conn, s2["id"], [d2])["saved"] == 1
+    mb = memories.event_detail(cfg, conn, b)["memory"]
+    assert "I went to Goa with Rahul." in mb["story"] and mb["content"] is True
+
+    # an old session (made before the voice fixes) whose recording is still here is offered again
+    s3 = story.start(cfg)
+    story.append_chunk(cfg, s3["id"], 0, data)
+    old = story.load(cfg, s3["id"]) | {"state": "review", "segments": [{"start": 0, "end": 1, "text": "x"}]}
+    story._save(cfg, old)
+    assert next(x for x in story.sessions(cfg) if x["id"] == s3["id"])["outdated"]
+    story.discard(cfg, s3["id"])
+
+    # long tellings are drafted alone, and a summary is sent back to be retold in full
+    items = [{"event_id": str(i), "said": "word " * n, "about_photo": []} for i, n in enumerate((50, 2000, 60, 70))]
+    assert [len(x) for x in story.batches(items)] == [1, 1, 2]
+    asked = []
+
+    def short_then_long(cfg, ai, items, context):
+        asked.append([it.get("too_short") for it in items])
+        return [{"event_id": it["event_id"], "story": "word " * (50 if not it.get("too_short") else 900),
+                 "content": True} for it in items]
+    monkeypatch.setattr(story, "_draft_batch", short_then_long)
+    got, failed = story.draft_all(cfg, "gemini", [items[1]], {})
+    assert failed is None and len(got[0]["story"].split()) == 900 and asked[1][0].startswith("Your last version")
+
+
+def test_memory_repair_and_move(env, monkeypatch):
+    import json as _json
+
+    from contentrag import memories, memory_repair, story
+
+    cfg, conn = _analysed(env, monkeypatch)
+    evs = memories.list_events(cfg, conn)["events"]
+    a, b = evs[0]["id"], evs[1]["id"]
+    (cfg.library_dir / "vocabulary.txt").write_text("Mania -> Manya\n")
+    told = ("Hum log college gaye the. 저는 그곳에 갔습니다 그리고 친구들과. Mania ne kaha chalo. Thank you. "
+            + "phir hum hostel aaye aur khana khaya. " * 30)
+    memories.save_memory(cfg, conn, a, {"story": "I went to IIT Guwahati.", "meaning": "Big day.", "importance": 3,
+                                        "people": ["Mania"], "told": told, "source": "story mode"})
+    lost = "저는 그곳에 갔습니다 그리고 친구들과 같이 밥을 먹었어요 정말 재미있었어요. " * 10 + "Phir ghar."
+    memories.save_memory(cfg, conn, b, {"story": "Something.", "told": lost, "source": "story mode"})
+    na, nb = (cfg.vault_dir / memories.event_detail(cfg, conn, x)["memory"]["note"] for x in (a, b))
+    before = na.read_text(), nb.read_text()
+
+    # dry run: a report, nothing changed
+    res = memory_repair.repair(cfg, conn, dry_run=True, log=lambda *_: None)
+    assert res["damaged"] == 1 and res["retell"] == 1 and res["rewritten"] == 0
+    assert (na.read_text(), nb.read_text()) == before
+    assert "Tell these again" in (cfg.vault_dir / "_generated" / "Memory repair.md").read_text()
+
+    asked = []
+
+    def fake_ask(cfg, ai, prompt, schema, system):
+        data = _json.loads(prompt)
+        asked.append(data)
+        return {"memories": [{"id": n["id"], "story": "I went to college with Manya. " + "We came back to the hostel "
+                              "and ate. " * 3, "questions": ["Which college was it?"], "people": ["Manya"]}
+                             for n in data["notes"]]}
+    monkeypatch.setattr(story, "ai_name", lambda cfg: "claude-code")
+    monkeypatch.setattr(story, "ask_ai", fake_ask)
+    res = memory_repair.repair(cfg, conn, log=lambda *_: None)
+    assert res["rewritten"] == 1 and res["flagged"] == 1
+    sent = asked[0]["notes"][0]
+    assert "저는" not in sent["as_told"] and "Thank you" not in sent["as_told"] and sent["earlier_draft"].startswith("I went")
+    assert asked[0]["vocabulary"]["mishearings"] == {"Mania": "Manya"}
+    text = na.read_text()
+    assert "## What happened\nI went to college with Manya." in text and "repaired: " in text
+    assert "people: [Manya]" in text or 'people: ["Manya"]' in text
+    assert "IIT Guwahati" in text.split("## Earlier versions (voice-to-text errors)")[1]  # kept aside, not the story
+    assert "저는" not in text.split("## As told (voice)")[1].split("## ")[0]
+    assert "- Which college was it?" in text and "Which college was it?" in memories.event_detail(cfg, conn, a)["memory"]["questions"]
+    assert "needs_retelling: yes" in nb.read_text()
+    assert next(e for e in memories.list_events(cfg, conn)["events"] if e["id"] == b)["retell"]
+    assert memory_repair.repair(cfg, conn, log=lambda *_: None)["rewritten"] == 0  # done once
+
+    # told again: the damaged version goes aside, the flag is cleared
+    memories.save_memory(cfg, conn, b, {"story": "The whole day, told again.", "told": "new words", "retold": True,
+                                        "source": "story mode"})
+    text = nb.read_text()
+    assert "needs_retelling" not in text and "## As told (voice)\nnew words" in text
+    assert "Something." in text.split("## Earlier versions (voice-to-text errors)")[1]
+    assert not next(e for e in memories.list_events(cfg, conn)["events"] if e["id"] == b)["retell"]
+    # saving keeps the flags it doesn't manage
+    memories.save_memory(cfg, conn, a, {"story": "I went to college with Manya.", "importance": 3})
+    assert "repaired: " in na.read_text()
+
+    # move a story to the event it belongs to: combined with the memory there, old note kept aside
+    with pytest.raises(ValueError):
+        memories.move_memory(cfg, conn, a, a)
+    out = memories.move_memory(cfg, conn, a, b)
+    moved = (cfg.vault_dir / out["note"]).read_text()
+    assert "The whole day, told again." in moved and "I went to college with Manya." in moved
+    assert "## Moved here" in moved and not na.exists() and memories.event_detail(cfg, conn, a)["memory"] is None
+    assert list((cfg.vault_dir / "Memories" / "_merged").rglob(na.name))
+    with pytest.raises(ValueError):
+        memories.move_memory(cfg, conn, a, b)  # nothing left to move
+
+    # which nearby event a story names
+    def ev(i, day, place, title, n=1, tags=()):
+        return [{"id": f"{i}-{k}", "taken_at": f"2021-10-{day:02d}T10:00", "place": place, "collection": None,
+                 "title": title, "tags": _json.dumps(list(tags))} for k in range(n)]
+    fake = [ev(1, 15, "Lucknow, Uttar Pradesh", "Street food"), ev(2, 16, "Lucknow, Uttar Pradesh", "Friends at a cafe"),
+            ev(3, 17, "Varanasi, Uttar Pradesh", "Ganga aarti at the ghat", 40, ["ghat", "aarti"]),
+            ev(4, 20, "New Delhi, Delhi", "Hostel room")]
+    monkeypatch.setattr(memories, "_events", lambda cfg, conn: fake)
+    sug = memories.suggest_move(cfg, conn, "2-0", "We took the train to Varanasi and watched the aarti at the ghat.")
+    assert sug["event_id"] == "3-0" and sug["items"] == 40 and "Varanasi" in sug["why"]
+    assert memories.suggest_move(cfg, conn, "3-0", "Varanasi aarti at the ghat") is None  # already on it
+    assert memories.suggest_move(cfg, conn, "2-0", "We had chai with friends.") is None
+    near = memories.nearby_events(cfg, conn, "2-0", n=1)
+    assert [x["id"] for x in near] == ["1-0", "2-0", "3-0"] and near[1]["this"]
+

@@ -10,8 +10,14 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   `vault.read_memories` and shown on generated event/year notes; `_generated/Interview queue.md`.
   Dashboard Memories tab (`memories.py`): same event ids as the vault, media + voice (local
   mlx-whisper via `/api/transcribe`) → `save_memory` (keeps sections it doesn't manage).
-  Story mode (`story.py`): chunked recording + timeline → whisper segments → `assign` to events →
-  AI drafts (claude-code login, else Gemini, else words as said) → review → `approve` (`library_dir/story/`).
+  Story mode (`story.py`): chunked recording + timeline → each event's stretch of audio (`runs`, cut at quiet
+  points) → `voice.py` (language always set: mixed=hi / en / translate; large-v3 `memory_model`; prompt = people,
+  places, folders, `library_dir/vocabulary.txt`, the event; ≤28 s pieces; cleaner drops wrong scripts/languages,
+  loops, "foreign", phantom lines) → AI drafts = full retelling, not a summary (claude-code login, else Gemini, else
+  words as said; size-based batches, summaries retried) → review (Belongs to / move) → `approve`; audio kept in
+  `library_dir/story/audio/`. `crag memories repair` (`memory_repair.py`) fixes notes from the old pipeline (text
+  only; old notes keep `## Earlier versions (voice-to-text errors)`, flag `needs_retelling`); `move_memory` /
+  `suggest_move` for stories told on the wrong event.
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
 - AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the

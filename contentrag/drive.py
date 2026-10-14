@@ -163,6 +163,9 @@ lives on the computer.
 - Hidden people never appear. A held-back clip (`./crag search ... --held-back`) is used only when the
   user asks for that clip in chat; their face is then blurred as a layer in HyperFrames / Remotion.
 - New footage copied onto the drive: `./crag autopilot --only "<that folder>"` analyses just it.
+- Memories: never take facts from `## Earlier versions (voice-to-text errors)`. Voice-to-text damage:
+  `./crag memories repair --dry-run`, then `./crag memories repair`. Names it mishears go in
+  `ContentLibrary/vocabulary.txt` (`wrong -> right`).
 - AI analysis needs a key on this computer (`~/.content-rag/keys`) or the Claude subscription
   (`./crag --backend claude-code autopilot ...`). Searching and editing need neither.
 """

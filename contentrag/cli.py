@@ -413,6 +413,36 @@ def cmd_drive(args):
     print(json.dumps(setup(load_config(args.config), args.drive), indent=2))
 
 
+def cmd_memories(args):
+    cfg = load_config(args.config)
+    conn = connect(cfg.db_path)
+    try:
+        if args.action == "repair":
+            from .memory_repair import repair
+
+            result = repair(cfg, conn, dry_run=args.dry_run, force=args.force)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.action == "move":
+            from .memories import move_memory
+
+            if len(args.events) != 2:
+                raise SystemExit("usage: crag memories move <event id it's on> <event id it belongs to>")
+            print(json.dumps(move_memory(cfg, conn, *args.events), indent=2))
+        elif args.action == "vocabulary":
+            from .voice import vocab_path, vocabulary
+
+            v = vocabulary(cfg, conn)
+            print(f"Your words: {vocab_path(cfg)}")
+            for k in ("terms", "people", "places", "folders"):
+                print(f"{k}: {', '.join(v[k][:40])}{' …' if len(v[k]) > 40 else ''}")
+            for wrong, right in v["fixes"].items():
+                print(f"  {wrong} -> {right}")
+    except ValueError as e:
+        raise SystemExit(str(e))
+    finally:
+        conn.close()
+
+
 def cmd_ui(args):
     from .ui import serve
 
@@ -602,6 +632,15 @@ def main(argv=None):
     sp.add_argument("action", choices=["setup"], help="setup: copy the code, config, skills and launcher onto it")
     sp.add_argument("--drive", help="drive folder (default: the drive the library is on)")
     sp.set_defaults(fn=cmd_drive)
+
+    sp = sub.add_parser("memories", help="repair memories damaged by voice-to-text, move one, show the vocabulary")
+    sp.add_argument("action", choices=["repair", "move", "vocabulary"],
+                    help="repair: clean + rewrite damaged memories, mark the ones to tell again | "
+                         "move <from> <to>: put a memory on the event it belongs to | vocabulary: words Whisper is told")
+    sp.add_argument("events", nargs="*", help="for move: the event id it's on, then the one it belongs to")
+    sp.add_argument("--dry-run", action="store_true", help="only report what would change")
+    sp.add_argument("--force", action="store_true", help="also memories repaired before")
+    sp.set_defaults(fn=cmd_memories)
 
     sp = sub.add_parser("ui", help="local dashboard in your browser (http://127.0.0.1:8765)")
     sp.add_argument("--port", type=int, default=8765)

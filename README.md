@@ -405,13 +405,36 @@ How the vault learns what things meant (the "brain"):
   (full resolution: zoom with the trackpad or a double-click, drag to move, <kbd>←</kbd> <kbd>→</kbd> other
   photos, <kbd>Esc</kbd> back). The slideshow waits while it's open, and what you say then is tied to that
   photo; saying "photo 3 is…" works too. One recording runs for the whole session and is saved to the drive every 3 seconds;
-  an interrupted session can be finished later. On **Finish**, Whisper (on your Mac) turns it into text,
-  each sentence goes to the event that was on screen, and Claude (your Claude Code login; else Gemini;
-  else your words as said) writes each memory: story, what it meant, feeling, importance, people,
-  chapter, and whether it's for content. You check them on one screen and **Save all**.
+  an interrupted session can be finished later. Before you've said anything, a big event stays on screen
+  longer (and while you browse its photos), so a long story doesn't land on the next slide. On **Finish**,
+  each event's part of the recording is turned into text by Whisper on your Mac, and Claude (your Claude
+  Code login; else Gemini; else your words as said) writes each memory: the whole story as you told it
+  (not a summary), what it meant, feeling, importance, people, chapter, whether it's for content, and
+  open questions about what it couldn't make out. You check them on one screen, where **Belongs to** moves
+  a story told on the wrong slide to its event, and **Save all**. Recordings are kept in
+  `library/story/audio/` (each memory notes where in the recording it was told), so they can be redone.
+- **Voice to text** (Story mode and 🎙 Speak, `contentrag/voice.py`): you pick **Hindi + English** (mix
+  freely; recommended), **English only**, or **Hindi → English text** (shorter: loses details). The
+  language is never guessed: guessing is what turned Hinglish into Korean, Russian or Italian. Memories
+  use the big Whisper model (`[transcribe] memory_model`, large-v3, ~3 GB once; slower than turbo, much
+  better at Hindi). Whisper is told your people, places, folders and the event on screen, plus your own
+  words from `library/vocabulary.txt` (one per line; `Mania -> Manya` for a name it keeps mishearing;
+  `crag memories vocabulary` shows them). The audio is cut into pieces of at most ~28 s at quiet moments,
+  silence is skipped, and lines in a wrong script or language, loops, "foreign" and invented lines
+  ("Thank you.") are removed (marked `[unclear]` where words were lost).
+- **Repair** (`crag memories repair`, or *Check & repair* under Story mode): memories saved with the old
+  voice-to-text are checked. Damaged ones, and long tellings that were saved as a short summary, get
+  *What happened* written again in full from your cleaned words (the earlier text stays in the note
+  under *Earlier versions (voice-to-text errors)*; unclear points go to *Open questions*). The ones that
+  lost most of what you said are marked `needs_retelling: yes`: Story mode → *Memories that need telling
+  again* plays just those, and the One by one list has a *Need telling again* filter. Stories that name a
+  nearby event's place or occasion are listed as *maybe on the wrong event*; **Move it there** (One by
+  one) moves a memory, combining it with one already there. `--dry-run` only writes the report
+  (`LifeVault/_generated/Memory repair.md`). Recordings of sessions saved before this were deleted then,
+  so those can only be repaired from their text, or told again.
 - **One by one** (`crag ui` → Memories): your events in date and time order. For each one you see
   the photos and play the videos, then tell the story: typed, or with 🎙 Speak, which is transcribed
-  by Whisper on your Mac (pick Hindi, English, or Hindi → English text). macOS Dictation (Fn twice)
+  by Whisper on your Mac (pick Hindi + English, English, or Hindi → English text). macOS Dictation (Fn twice)
   works in the boxes too. Feeling, importance stars, people and life chapter are one click each.
   Save & next (⌘↵) writes the memory into the vault. Drafts are kept if you leave mid-way.
   Pictures recognised as someone you've hidden have a yellow frame (in Story mode too). Open one to see

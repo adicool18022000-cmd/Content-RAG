@@ -128,6 +128,7 @@ select.field { appearance: none; -webkit-appearance: none; padding-right: 30px; 
 .badge.red { background: rgba(255, 59, 48, .12); color: var(--red); }
 .badge.blue { background: var(--accent-soft); color: var(--accent); }
 .badge.green { background: rgba(52, 199, 89, .14); color: var(--green); }
+.badge.orange { background: rgba(255, 159, 10, .16); color: var(--orange); height: 18px; padding: 0 7px; font-size: 11px; }
 .chev { width: 8px; height: 8px; border-right: 2px solid var(--tertiary); border-bottom: 2px solid var(--tertiary);
         transform: rotate(-45deg); transition: transform .2s; flex: none; margin: 0 4px 0 2px; }
 details[open] > summary .chev { transform: rotate(45deg); }
@@ -553,7 +554,7 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
         <div class="toolbar">
           <select class="field" id="memYear" aria-label="Year"></select>
           <select class="field" id="memShow" aria-label="Which events">
-            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option><option value="hidden">With hidden people</option>
+            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option><option value="hidden">With hidden people</option><option value="retell">Need telling again</option>
           </select>
         </div>
         <div class="muted" id="memProgress" style="font-size:13px;padding:0 4px">Loading…</div>
@@ -660,17 +661,19 @@ function renderMemList() {
   const y = $("memYear").value, show = $("memShow").value;
   const done = MEM.events.filter(e => e.done).length;
   const hp = MEM.events.filter(e => e.hidden).length;
-  $("memProgress").innerHTML = `${done} of ${MEM.events.length} events told` + (hp ? ` · <span class="hpt">${hp} with hidden people</span>` : "");
+  const rt = MEM.events.filter(e => e.retell).length;
+  $("memProgress").innerHTML = `${done} of ${MEM.events.length} events told` + (hp ? ` · <span class="hpt">${hp} with hidden people</span>` : "")
+    + (rt ? ` · <span class="badge orange">${rt} to tell again</span>` : "");
   let month = "", html = "";
   MEM.events.forEach((e, i) => {
     if (e.date.slice(0, 4) !== y) return;
-    if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden)) return;
+    if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden) || (show === "retell" && !e.retell)) return;
     const m = e.date.slice(0, 7);
     if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
     html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}${e.hidden ? " hp" : e.allowed ? " ok" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
       <span class="tick" title="${e.done ? (e.content === false ? "Not for content" : "Told") : "Not told yet"}"></span>
       <span style="min-width:0"><div class="t">${esc(e.date.slice(8))} · ${esc(e.place || e.title)}</div>
-      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}${e.hidden ? ` · <span class="hpt">${e.hidden} with hidden people</span>` : ""}${e.allowed ? ` · <span class="okt">${e.allowed} allowed</span>` : ""}</div></span></button>`;
+      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}${e.hidden ? ` · <span class="hpt">${e.hidden} with hidden people</span>` : ""}${e.allowed ? ` · <span class="okt">${e.allowed} allowed</span>` : ""}${e.retell ? ` · <span class="badge orange">tell again</span>` : ""}</div></span></button>`;
   });
   $("memList").innerHTML = html || `<div class="empty" style="padding:24px">Nothing here.</div>`;
   const list = $("memList"), cur = list.querySelector('[aria-current="true"]');
@@ -713,13 +716,17 @@ function renderEvent() {
         <div style="font-size:13px">${ev.hidden_shown ? "Shown with a yellow frame. Under each one you can see the face that was recognised: if it's someone else, press <b>Not …</b> or type who it is, and the picture is back in your story." : "Left out of your videos. Look through them here if you want to tell this part too."}</div></div>
       <button class="btn small" type="button" id="mHidden">${ev.hidden_shown ? "Hide them" : "Review them"}</button>
       <button class="btn small" type="button" id="mRecheck" title="Compare every face tagged as a hidden person with your other face groups">Re-check all tags</button></div>` : ""}
+    ${m.retell ? `<div class="notice warn"><div><b>Tell this one again.</b> <span style="font-size:13px">The old voice-to-text lost most of what you said here. Speak it again below (or Story mode → “Memories that need telling again”). The damaged text is kept in the note.</span></div></div>` : ""}
+    ${ev.suggest_move ? `<div class="notice" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:220px"><b>Told on the wrong event?</b>
+      <div style="font-size:13px">This story mentions ${esc(ev.suggest_move.why.join(", "))}, which fits ${esc(fmtDate(ev.suggest_move.date))} · ${esc(ev.suggest_move.place || ev.suggest_move.title)} (${ev.suggest_move.items} photos/videos) better.</div></div>
+      <button class="btn primary small" type="button" id="mMoveSug">Move it there</button></div>` : ""}
+    ${(m.questions || []).length ? `<div class="notice" style="font-size:13px"><div><b>Open questions</b> (things the voice-to-text or the AI couldn't make out; fix the story if you know):<ul style="margin:4px 0 0 18px;padding:0">${m.questions.map(q => `<li>${esc(q)}</li>`).join("")}</ul></div></div>` : ""}
     ${m.merged > 1 ? `<div class="notice">You told this day in ${m.merged} parts before (events used to be split finer). They're shown together below; saving combines them into one memory.</div>` : ""}
     <div class="card ask stack" style="gap:18px">
       <div><label for="mStory">What was happening? <span class="hint">Where were you, who was there, why, what happened before and after.</span></label>
         <textarea id="mStory" placeholder="Tell it like you'd tell a friend…">${esc(v.story)}</textarea>
         <div class="tools"><button class="btn small mic" type="button" data-for="mStory">🎙 Speak</button>
-          <select class="field" id="mLang" style="height:30px;font-size:13px;max-width:220px" aria-label="Voice language">
-            <option value="auto">Voice: automatic</option><option value="hi">Hindi (देवनागरी)</option><option value="en">English</option><option value="translate">Hindi → English text</option></select>
+          <select class="field" id="mLang" style="height:30px;font-size:13px;max-width:260px" aria-label="Voice language">${langOpts("Voice: ")}</select>
           <select class="field" id="mMic" style="height:30px;font-size:13px;max-width:240px" aria-label="Microphone"><option value="">Microphone: default</option></select>
           <span class="muted" style="font-size:12px">Transcribed privately on this Mac. macOS Dictation (press Fn twice) works too.</span></div></div>
       <div><label for="mMeaning">What did it mean to you? <span class="hint">One or two lines. How you felt, what it changed.</span></label>
@@ -740,6 +747,9 @@ function renderEvent() {
         Use this in my videos <span class="hint">(untick for private or unimportant moments: their clips are never suggested)</span></label>
       <div><label for="mAngle">Could this be a reel? <span class="hint">Optional</span></label>
         <input class="field" id="mAngle" style="width:100%" value="${esc(v.angle)}" placeholder="e.g. 'The night I almost quit' — story to camera with this footage"></div>
+      ${m.note && ev.nearby.length > 1 ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="muted" style="font-size:13px">Told while the wrong event was on screen?</span>
+        <select class="field" id="mMoveTo" style="flex:1;min-width:200px;max-width:460px;height:32px;font-size:13px"><option value="">Move this memory to…</option>${ev.nearby.filter(x => !x.this).map(x =>
+          `<option value="${esc(x.id)}">${esc(evLabel(x))}${x.done ? " · has a memory (they're combined)" : ""}</option>`).join("")}</select></div>` : ""}
       <div class="mem-actions"><span class="muted" id="mSaved" style="font-size:13px">${m.note ? "Saved in " + esc(m.note) : "Not saved yet"}</span>
         <div class="row-actions"><span class="muted" style="font-size:12px">⌘↵ saves</span><button class="btn plain" type="button" id="mSkip" title="Decide later">Skip</button>
           <button class="btn" type="button" id="mUnimportant" title="Saved as told, never used in content">Not important</button>
@@ -753,6 +763,8 @@ function renderEvent() {
   $("mSave").onclick = () => saveMemory();
   $("mUnimportant").onclick = () => saveMemory({content: false, unimportant: true});
   if ($("mRecheck")) $("mRecheck").onclick = recheckTags;
+  if ($("mMoveSug")) $("mMoveSug").onclick = () => moveMemory(ev.suggest_move.event_id);
+  if ($("mMoveTo")) $("mMoveTo").onchange = () => { if ($("mMoveTo").value) moveMemory($("mMoveTo").value); };
   if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !ev.hidden_shown;
     if (!MEM.hidden && $("memShow").value === "hidden") $("memShow").value = "all"; openEvent(MEM.idx); };
   if ($("mStrip")) $("mStrip").onclick = (x) => { const b = x.target.closest("button"); if (b) showItem(+b.dataset.k); };
@@ -767,7 +779,7 @@ function renderEvent() {
   $("memMain").querySelectorAll("textarea, input").forEach(el => el.addEventListener("input", () => { MEM.dirty = true; }));
   $("mContent").onchange = () => { MEM.dirty = true; };
   $("memMain").querySelectorAll(".mic").forEach(b => b.onclick = () => toggleMic(b));
-  try { $("mLang").value = mstore.get("mem.lang") || "auto"; } catch (x) {}
+  $("mLang").value = langOf("mem.lang");
   $("mLang").onchange = () => mstore.set("mem.lang", $("mLang").value);
   fillMics();
   $("mMic").onchange = () => mstore.set("mem.mic", $("mMic").value);
@@ -807,8 +819,20 @@ function saveDraft() {
   if (!MEM.ev || !MEM.dirty || !$("mStory")) return;
   mstore.set("mem.draft." + MEM.ev.id, JSON.stringify(formData()));
 }
+async function moveMemory(to) {
+  const target = (MEM.ev.nearby || []).find(x => x.id === to) || MEM.ev.suggest_move || {};
+  if (!confirm(`Move this memory to ${target.date ? fmtDate(target.date) : "that event"}${target.place ? " · " + target.place : ""}?` +
+               (target.done ? "\n\nThat event already has a memory: the two are combined." : "") +
+               "\n\nThe note as it is now is kept in Memories/_merged.")) { if ($("mMoveTo")) $("mMoveTo").value = ""; return; }
+  saveDraft();
+  const j = await (await post("/api/memories/move", {from: MEM.ev.id, to})).json();
+  if (!j.ok) { toast(j.error || "Couldn't move it"); return; }
+  toast("Moved"); MEM.events = []; mstore.set("mem.last", to); await loadMemories();
+}
 async function saveMemory(opts) {
   const d = Object.assign(formData(), opts && {content: false});
+  const m = MEM.ev.memory || {};
+  if (m.retell && d.story.trim() !== (m.story || "").trim()) d.needs_retelling = false;  // told again here
   if (opts && opts.unimportant) { if (!d.meaning.trim()) d.meaning = "Not important."; if (!d.importance) d.importance = 1; }
   if (!d.story.trim() && !d.meaning.trim()) { toast("Tell a bit of the story first, or press Skip / Not important"); return; }
   $("mSave").disabled = true;
@@ -817,6 +841,7 @@ async function saveMemory(opts) {
   if (!j.ok) { toast(j.error || "Couldn't save"); return; }
   mstore.set("mem.draft." + MEM.ev.id, null); MEM.dirty = false;
   const e = MEM.events[MEM.idx]; e.done = true; e.importance = d.importance; e.content = d.content;
+  if (d.needs_retelling === false) e.retell = false;
   toast("Saved to your Life Vault");
   openEvent(MEM.idx + 1 < MEM.events.length ? MEM.idx + 1 : MEM.idx);  // the last one: stay and show it saved
 }
@@ -864,7 +889,7 @@ async function toggleMic(btn) {
     if (blob.size < 1500) { toast("The recording came through empty. Pick the right microphone next to Speak and talk for a few seconds."); return done(); }
     if (ctx && peak < 3) { toast("The microphone didn't pick up any sound. Pick another one next to Speak, or check System Settings › Sound › Input."); return done(); }
     try {
-      const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "auto")}`,
+      const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "mixed")}&event=${encodeURIComponent(MEM.ev ? MEM.ev.id : "")}`,
         {method: "POST", headers: {"Content-Type": blob.type, "X-Crag": "1"}, body: blob});
       const j = await r.json();
       if (j.text) { const ta = $(btn.dataset.for); ta.value = (ta.value.trim() ? ta.value.trim() + "\n\n" : "") + j.text; MEM.dirty = true; saveDraft(); }
@@ -888,6 +913,10 @@ window.addEventListener("beforeunload", saveDraft);
 const STORY = {live: false, sid: null, rec: null, stream: null, seq: 0, queue: [], sending: false, order: [], pos: 0,
   timeline: [], marks: {}, cur: null, acc: 0, runAt: 0, paused: false, lastVoice: 0, shownAt: 0, wait: 4, floor: 4,
   cache: {}, raf: 0, ticker: 0, saver: 0, ctx: null, mode: "auto", review: null};
+// the voice language is always set: guessing it turned Hinglish into Korean or Italian
+const LANGS = [["mixed", "Hindi + English (recommended)"], ["en", "English only"], ["translate", "Hindi → English text (shorter, loses details)"]];
+const langOf = (k) => { const v = mstore.get(k); return LANGS.some(l => l[0] === v) ? v : "mixed"; };
+const langOpts = (prefix = "") => LANGS.map(([v, t]) => `<option value="${v}">${prefix}${t}</option>`).join("");
 const audioNow = () => (STORY.acc + (STORY.paused || !STORY.runAt ? 0 : performance.now() - STORY.runAt)) / 1000;
 
 function showMemMode() {
@@ -908,11 +937,14 @@ async function renderStorySetup() {
               "gemini": "Gemini writes the memories from your words (your Gemini key)."}[sj.ai] ||
              "No AI is set up, so your words are saved as you said them (Claude can tidy them later).";
   const done = MEM.events.filter(e => e.done).length;
+  const retell = MEM.events.filter(e => e.retell).length;
   $("storyView").innerHTML = `
     ${(sj.sessions || []).map(x => `<div class="notice" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="flex:1;min-width:200px"><b>${x.state === "review" ? "Memories waiting for you to check" : x.state === "recording" ? "A session was interrupted" : x.state === "error" ? "A session couldn't be finished" : "A session is being processed"}</b>
-      <div class="muted" style="font-size:13px">${esc(x.created)} · ${x.events} events${x.message ? " · " + esc(x.message) : ""}</div></div>
-      ${x.state === "review" ? `<button class="btn primary small" data-review="${x.id}">Check & save</button>` :
+      <div class="muted" style="font-size:13px">${esc(x.created)} · ${x.events} events${x.message ? " · " + esc(x.message) : ""}</div>
+      ${x.outdated ? `<div style="font-size:13px">Written with the old voice-to-text. Redo it first: the recording is still here.</div>` : ""}</div>
+      ${x.outdated ? `<button class="btn primary small" data-redo="${x.id}">Redo the text</button>` : ""}
+      ${x.state === "review" ? `<button class="btn ${x.outdated ? "" : "primary "}small" data-review="${x.id}">Check & save</button>` :
         x.state === "processing" && x.running ? `<button class="btn small" data-review="${x.id}">Show progress</button>` :
         `<button class="btn primary small" data-finish="${x.id}">${x.state === "recording" ? "Finish it" : "Try again"}</button>`}
       <button class="btn plain small" data-discard="${x.id}">Discard</button></div>`).join("")}
@@ -922,7 +954,7 @@ async function renderStorySetup() {
         <ol class="story-steps">
           <li><b>Your events play like a slideshow</b>, in date order, with their photos and videos.</li>
           <li><b>Just talk</b>: what happened, who was there, how it felt. Say "skip" or press <span class="kbd">X</span> for things that don't matter.</li>
-          <li><b>It moves on by itself</b> when you're quiet for a few seconds. Long stories keep the event on screen.</li>
+          <li><b>It moves on by itself</b> when you're quiet for a few seconds after talking. Until you start, a big event waits so you can look through it.</li>
           <li><b>Press Finish</b>. Your voice becomes text on this Mac, and the memories are written for you to check and save.</li>
         </ol>
         <div class="muted" style="font-size:13px">${esc(ai)} ${done} of ${MEM.events.length} events told so far.</div>
@@ -931,25 +963,41 @@ async function renderStorySetup() {
         <label class="opt"><span>Start from</span><select class="field" id="sStart">
           ${firstTodo >= 0 ? `<option value="${firstTodo}">First event not told yet (${esc(label(firstTodo))})</option>` : ""}
           ${cur >= 0 && cur !== firstTodo ? `<option value="${cur}">The event open in One by one (${esc(label(cur))})</option>` : ""}
+          ${retell ? `<option value="retell">Memories that need telling again (${retell})</option>` : ""}
           <option value="year">Start of a year…</option></select></label>
         <label class="opt" id="sYearRow" hidden><span>Year</span><select class="field" id="sYear">${[...new Set(MEM.events.map(e => e.date.slice(0, 4)))].map(y => `<option>${y}</option>`).join("")}</select></label>
         <label class="check"><input type="checkbox" id="sTold"> Also show events already told</label>
         <label class="opt"><span>Move on after you're quiet for</span><select class="field" id="sWait">
           ${[3, 4, 6, 8, 12].map(n => `<option value="${n}"${n === (+mstore.get("story.wait") || 4) ? " selected" : ""}>${n} seconds</option>`).join("")}</select></label>
-        <label class="opt"><span>Your voice</span><select class="field" id="sLang">
-          <option value="auto">Automatic</option><option value="hi">Hindi (देवनागरी)</option><option value="en">English</option><option value="translate">Hindi → English text</option></select></label>
+        <label class="opt"><span>You'll talk in</span><select class="field" id="sLang">${langOpts()}</select></label>
         <label class="opt"><span>Microphone</span><select class="field" id="sMic"><option value="">Default</option></select></label>
         <button class="btn primary large" type="button" id="sGo">● Start talking</button>
       </div>
-    </div>`;
-  try { $("sLang").value = mstore.get("story.lang") || "auto"; } catch (e) {}
+    </div>
+    <div class="card stack" style="gap:10px">
+      <h3 style="margin:0">For the best text</h3>
+      <ul class="story-steps" style="margin:0">
+        <li><b>Mix Hindi and English freely</b> with “Hindi + English”. Nothing is guessed any more, and each event is written out in full, not summarised.</li>
+        <li><b>Say names clearly</b>, and add the ones it gets wrong to <code>vocabulary.txt</code> in your library folder (e.g. <code>Mania -&gt; Manya</code>).</li>
+        <li><b>Long trip?</b> The slide waits until you start talking. Open a photo to talk about it, and press <span class="kbd">→</span> when you're done.</li>
+        <li><b>10–20 minutes per session</b> is easy to check. Your recordings are now kept, so they can be redone later.</li>
+      </ul>
+    </div>
+    <div class="card" id="repairCard" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px"><b>Repair memories saved with the old voice-to-text</b>
+        <div class="muted" style="font-size:13px" id="repairMsg">Cleans wrong scripts, loops and “Thank you.” lines, writes damaged or summarised stories again in full from your words (the old text is kept), and lists the ones to tell again or that sit on the wrong event.</div></div>
+      <button class="btn small" type="button" id="repairGo">Check &amp; repair</button></div>`;
+  $("sLang").value = langOf("story.lang");
   fillMics($("sMic"));
   $("sMic").onchange = () => mstore.set("mem.mic", $("sMic").value);
   $("sStart").onchange = () => { $("sYearRow").hidden = $("sStart").value !== "year"; };
   $("sGo").onclick = startStory;
   $("storyView").querySelectorAll("[data-review]").forEach(b => b.onclick = () => openReview(b.dataset.review));
   $("storyView").querySelectorAll("[data-finish]").forEach(b => b.onclick = async () => {
-    await post("/api/story/finish", {id: b.dataset.finish, mode: mstore.get("story.lang") || "auto"}); openReview(b.dataset.finish); });
+    await post("/api/story/finish", {id: b.dataset.finish, mode: langOf("story.lang")}); openReview(b.dataset.finish); });
+  $("storyView").querySelectorAll("[data-redo]").forEach(b => b.onclick = async () => {
+    await post("/api/story/finish", {id: b.dataset.redo, mode: $("sLang").value, redo: true}); openReview(b.dataset.redo); });
+  $("repairGo").onclick = runRepair;
   $("storyView").querySelectorAll("[data-discard]").forEach(b => b.onclick = async () => {
     if (!confirm("Discard this session? What you said in it is deleted.")) return;
     await post("/api/story/discard", {id: b.dataset.discard}); renderStorySetup(); });
@@ -957,10 +1005,14 @@ async function renderStorySetup() {
 
 async function startStory() {
   let start = $("sStart").value;
-  if (start === "year") start = MEM.events.findIndex(e => e.date.slice(0, 4) === $("sYear").value);
-  start = Math.max(0, +start);
   const told = $("sTold").checked;
-  STORY.order = []; for (let i = start; i < MEM.events.length; i++) if (told || !MEM.events[i].done) STORY.order.push(i);
+  STORY.order = [];
+  if (start === "retell") MEM.events.forEach((e, i) => { if (e.retell) STORY.order.push(i); });
+  else {
+    if (start === "year") start = MEM.events.findIndex(e => e.date.slice(0, 4) === $("sYear").value);
+    start = Math.max(0, +start);
+    for (let i = start; i < MEM.events.length; i++) if (told || !MEM.events[i].done) STORY.order.push(i);
+  }
   if (!STORY.order.length) { toast("Nothing left to tell from there"); return; }
   STORY.wait = +$("sWait").value; STORY.mode = $("sLang").value;
   mstore.set("story.wait", STORY.wait); mstore.set("story.lang", STORY.mode);
@@ -1037,7 +1089,7 @@ async function showStoryEvent(pos) {
   if (STORY.cur) { STORY.cur.end = now; if (STORY.cur.end - STORY.cur.start > 0.05) STORY.timeline.push(STORY.cur); }
   const i = STORY.order[STORY.pos], e = MEM.events[i];
   STORY.cur = {event_id: e.id, start: now};
-  STORY.shownAt = performance.now(); STORY.lastVoice = STORY.shownAt;
+  STORY.shownAt = performance.now(); STORY.lastVoice = STORY.shownAt; STORY.spoke = false; STORY.lastLook = 0;
   $("sCount").textContent = `Event ${STORY.pos + 1} of ${STORY.order.length}`;
   $("sCollage").className = "collage n1"; $("sCollage").innerHTML = "";
   $("sCap").innerHTML = `<div class="when">${esc(fmtDate(e.date))}</div><div class="what">${esc(e.time)}${e.place ? " · " + esc(e.place) : ""} · ${esc(e.title)}</div>`;
@@ -1065,6 +1117,8 @@ function renderStorySlide(ev) {
   }).join("") || `<div class="tile" style="display:grid;place-items:center;color:#888">${ev.held_back ? "Only photos with people you've hidden" : "No preview"}</div>`;
   box.querySelectorAll("video").forEach(v => v.onerror = () => { v.outerHTML = `<img src="${v.poster}" alt="">`; });
   box.onclick = (x) => { const t = x.target.closest(".tile[data-k]"); if (t) openLightbox(items, +t.dataset.k, true); };
+  const looking = () => { STORY.lastLook = performance.now(); };  // browsing the photos: not "quiet" yet
+  box.onpointermove = looking; box.onscroll = looking; box.onwheel = looking;
   const said = ev.items.flatMap(x => x.said).slice(0, 2);
   const total = ev.items.length + (ev.hidden_shown ? 0 : ev.held_back);
   const hidNames = [...new Set(ev.items.flatMap(x => x.hidden_people || []))];
@@ -1110,7 +1164,7 @@ function storyLoop() {
     let sum = 0; for (const v of buf) sum += (v - 128) * (v - 128);
     const rms = Math.sqrt(sum / buf.length);
     STORY.floor = rms < STORY.floor ? STORY.floor * 0.95 + rms * 0.05 : STORY.floor * 0.999 + rms * 0.001;
-    if (rms > Math.max(3, STORY.floor * 2.5)) STORY.lastVoice = performance.now();
+    if (rms > Math.max(3, STORY.floor * 2.5)) { STORY.lastVoice = performance.now(); if (STORY.lastVoice - STORY.shownAt > 400) STORY.spoke = true; }
     $("sLvl").style.width = Math.min(100, rms * 6) + "%";
   }
   STORY.raf = requestAnimationFrame(storyLoop);
@@ -1121,12 +1175,16 @@ function storyTick() {
   if (STORY.paused) { $("sNextBar").style.width = "0"; return; }
   if (LB.open) { STORY.lastVoice = performance.now(); $("sNextBar").style.width = "0";
     $("sState").textContent = "Photo open: the slideshow waits"; return; }
-  const quiet = (performance.now() - Math.max(STORY.lastVoice, STORY.shownAt)) / 1000;
-  $("sNextBar").style.width = Math.min(100, quiet / STORY.wait * 100) + "%";
-  if (quiet >= STORY.wait) {
+  // before you've said anything, a big event stays longer (time to look at its photos), so a story is
+  // never told on the next slide by mistake; once you've talked, it moves on after the usual pause
+  const e = MEM.events[STORY.order[STORY.pos]] || {};
+  const wait = STORY.spoke ? STORY.wait : STORY.wait + Math.min(20, (e.items || 0) / 8);
+  const quiet = (performance.now() - Math.max(STORY.lastVoice, STORY.shownAt, STORY.lastLook || 0)) / 1000;
+  $("sNextBar").style.width = Math.min(100, quiet / wait * 100) + "%";
+  if (quiet >= wait) {
     if (STORY.pos + 1 < STORY.order.length) showStoryEvent(STORY.pos + 1);
     else { $("sState").textContent = "That was the last event: press Finish"; STORY.lastVoice = performance.now(); }
-  } else $("sState").textContent = quiet > 1.2 ? `Next in ${Math.ceil(STORY.wait - quiet)}…` : "Listening…";
+  } else $("sState").textContent = quiet > 1.2 ? `Next in ${Math.ceil(wait - quiet)}…` : STORY.spoke ? "Listening…" : "Take your time: it waits until you talk";
 }
 async function finishStory() {
   if (!STORY.live) return;
@@ -1162,7 +1220,7 @@ async function openReview(sid) {
     if (s.state === "error" || s.state === "recording") {
       $("storyView").innerHTML = `<div class="notice warn">${esc(s.message || "Something went wrong")}</div>
         <div class="row-actions"><button class="btn primary" id="rRetry">Try again</button><button class="btn plain" id="rBack">Back</button></div>`;
-      $("rRetry").onclick = async () => { await post("/api/story/finish", {id: sid, mode: STORY.mode}); openReview(sid); };
+      $("rRetry").onclick = async () => { await post("/api/story/finish", {id: sid, mode: langOf("story.lang")}); openReview(sid); };
       $("rBack").onclick = () => { STORY.review = null; renderStorySetup(); };
       return;
     }
@@ -1170,12 +1228,17 @@ async function openReview(sid) {
     await new Promise(r => setTimeout(r, 2000));
   }
 }
+const wordCount = (t) => (t || "").split(/\s+/).filter(w => w && w !== "[unclear]").length;
+const evLabel = (x) => `${fmtDate(x.date).replace(/^\w+, /, "")}${x.end && x.end !== x.date ? " → " + x.end.slice(5) : ""} · ${x.place || x.title} (${x.items})`;
 function renderReview(s) {
   const drafts = s.drafts || [];
   const eras = [...new Set(drafts.map(d => d.era).filter(Boolean))];
   $("storyView").innerHTML = `
     <div class="mem-head"><div><h1 style="font-size:26px">Check your memories</h1><div class="sub">${esc(s.message || "")}. Change anything that's wrong, then save.</div></div>
       <div class="row-actions"><button class="btn plain" id="rDiscard">Discard</button><button class="btn primary" id="rSave">Save all</button></div></div>
+    ${s.outdated ? `<div class="notice warn" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:220px"><b>These were written from the old voice-to-text.</b>
+      <div style="font-size:13px">The recording is still here: redo the text with the language set and your names known, then check.</div></div>
+      <select class="field" id="rLang" style="max-width:260px">${langOpts()}</select><button class="btn primary small" id="rRedo">Redo the text</button></div>` : ""}
     ${drafts.length ? "" : `<div class="empty">Nothing was said in this session.</div>`}
     <datalist id="rEras">${eras.map(x => `<option value="${esc(x)}">`).join("")}</datalist>
     ${drafts.map((d, k) => `<div class="card draft${d.content === false ? " off" : ""}" data-k="${k}">
@@ -1184,7 +1247,14 @@ function renderReview(s) {
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(fmtDate(d.date))}${d.place ? " · " + esc(d.place) : ""}</b>
           <span style="display:flex;gap:14px;flex-wrap:wrap"><label class="check"><input type="checkbox" data-f="content" ${d.content === false ? "" : "checked"}> Use in my videos</label>
           <label class="check"><input type="checkbox" data-f="save" checked> Save</label></span></div>
-        <textarea data-f="story" aria-label="What happened">${esc(d.story)}</textarea>
+        ${d.retold ? `<div class="muted" style="font-size:13px">Told again: the damaged earlier version is kept aside in the note.</div>` : ""}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="muted" style="font-size:13px">Belongs to</span>
+          <select class="field" data-f="event" style="flex:1;min-width:200px;max-width:460px">${(d.nearby && d.nearby.length ? d.nearby : [{id: d.event_id, date: d.date, place: d.place, title: "", items: ""}]).map(x =>
+            `<option value="${esc(x.id)}"${x.id === d.event_id ? " selected" : ""}>${esc(evLabel(x))}${x.id === d.told_on ? " · on screen while you told it" : x.done ? " · has a memory" : ""}</option>`).join("")}</select>
+          ${d.suggest ? `<button class="btn small" type="button" data-move="${esc(d.suggest.event_id)}" title="You mentioned ${esc(d.suggest.why.join(", "))}">Sounds like ${esc(d.suggest.place || d.suggest.title)}, ${esc(fmtDate(d.suggest.date).replace(/^\w+, /, ""))}: move it there</button>` : ""}</div>
+        <textarea data-f="story" aria-label="What happened" style="min-height:${Math.min(520, 120 + Math.round((d.story || "").length / 5))}px">${esc(d.story)}</textarea>
+        ${d.told ? `<div class="muted" style="font-size:12px">You said ${wordCount(d.told)} words · the story has ${wordCount(d.story)}</div>` : ""}
+        ${(d.questions || []).length ? `<div class="notice" style="font-size:13px;margin:0"><div><b>Couldn't make out</b> (saved under Open questions; fix the story above if you know):<ul style="margin:4px 0 0 18px;padding:0">${d.questions.map(q => `<li>${esc(q)}</li>`).join("")}</ul></div></div>` : ""}
         <input class="field" data-f="meaning" value="${esc(d.meaning)}" placeholder="What it meant (one line)">
         <div class="row"><input class="field" data-f="feeling" value="${esc(d.feeling)}" placeholder="Feeling">
           <input class="field" data-f="people" value="${esc((d.people || []).join(", "))}" placeholder="People">
@@ -1196,21 +1266,46 @@ function renderReview(s) {
   $("storyView").querySelectorAll(".stars").forEach(st => st.onclick = (e) => { const b = e.target.closest("button"); if (!b) return;
     st.dataset.imp = b.dataset.n; st.querySelectorAll("button").forEach(x => x.classList.toggle("on", +x.dataset.n <= +b.dataset.n)); });
   $("storyView").querySelectorAll('[data-f="content"]').forEach(c => c.onchange = () => c.closest(".draft").classList.toggle("off", !c.checked));
+  $("storyView").querySelectorAll("[data-move]").forEach(b => b.onclick = () => {
+    const sel = b.closest(".draft").querySelector('[data-f="event"]'); sel.value = b.dataset.move; b.remove(); });
+  if ($("rRedo")) { $("rLang").value = langOf("story.lang");
+    $("rRedo").onclick = async () => { mstore.set("story.lang", $("rLang").value);
+      await post("/api/story/finish", {id: s.id, mode: $("rLang").value, redo: true}); openReview(s.id); }; }
   const save = async () => {
     const out = [...$("storyView").querySelectorAll(".draft")].map(el => {
       const d = {...drafts[+el.dataset.k]}, f = (n) => el.querySelector(`[data-f="${n}"]`);
-      Object.assign(d, {story: f("story").value, meaning: f("meaning").value, feeling: f("feeling").value, era: f("era").value.trim(),
+      Object.assign(d, {event_id: f("event").value, story: f("story").value, meaning: f("meaning").value, feeling: f("feeling").value, era: f("era").value.trim(),
         people: f("people").value.split(",").map(x => x.trim()).filter(Boolean), content: f("content").checked, save: f("save").checked,
         importance: +el.querySelector(".stars").dataset.imp});
       return d; });
     const j = await (await post("/api/story/approve", {id: s.id, drafts: out})).json();
     if (!j.ok) { toast(j.error || "Couldn't save"); return; }
-    toast(`${j.saved} memories saved to your Life Vault`);
+    toast(`${j.saved} memories saved to your Life Vault` + (j.errors && j.errors.length ? ` (${j.errors.length} couldn't be saved)` : ""));
     MEM.events = []; STORY.review = null; await loadMemories(); renderStorySetup();
   };
   $("rSave").onclick = save; if ($("rSave2")) $("rSave2").onclick = save;
   $("rDiscard").onclick = async () => { if (!confirm("Discard these drafts? What you said in this session is deleted.")) return;
     await post("/api/story/discard", {id: s.id}); STORY.review = null; renderStorySetup(); };
+}
+
+async function runRepair() {
+  if (!confirm("Check all saved memories and rewrite the ones damaged by the old voice-to-text?\n\nThe earlier text stays in each note. This uses your Claude login (or Gemini) and can take a while.")) return;
+  const j = await (await post("/api/run", {step: "repair_memories"})).json();
+  if (!j.ok) { toast(j.message || j.error || "Couldn't start"); return; }
+  $("repairGo").disabled = true;
+  let since = (await (await fetch("/api/log?since=0")).json()).next;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2500));
+    const l = await (await fetch(`/api/log?since=${since}`)).json().catch(() => null);
+    if (!l) continue;
+    since = l.next;
+    const last = l.lines.filter(x => x.includes("[repair]") || x.includes("ERROR")).pop();
+    if (last && $("repairMsg")) $("repairMsg").textContent = last.replace(/^\S+ \[repair\] /, "");
+    if (!l.running) break;
+  }
+  if ($("repairGo")) { $("repairGo").disabled = false; $("repairGo").textContent = "Check again"; }
+  if ($("repairMsg")) $("repairMsg").textContent += " The full list is in your Life Vault: _generated/Memory repair.md";
+  MEM.events = []; await loadMemories();
 }
 
 /* ------------------------------------------------------------- lightbox: look at one photo closely */
