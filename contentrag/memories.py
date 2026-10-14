@@ -19,7 +19,7 @@ from pathlib import Path
 from .config import Config
 from .db import jloads
 from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person
-from .faces import hidden_faces
+from .faces import hidden_faces, media_faces, reviews_for
 from .vault import _city, _q, _slug, _yaml_list, cluster_events, event_memory, read_memories
 
 MANAGED = ("What it meant", "What happened", "Content angle")
@@ -57,6 +57,7 @@ def list_events(cfg: Config, conn) -> dict:
     """Every event, oldest first, with whether it already has a memory."""
     memories = read_memories(cfg.vault_dir)
     with_hidden = _media_with_hidden_people(conn)
+    allowed = _media_with(conn, "allow")
     out = []
     for ev in _events(cfg, conn):
         mem = event_memory(ev, memories)
@@ -66,7 +67,8 @@ def list_events(cfg: Config, conn) -> dict:
                     "videos": sum(1 for m in ev if m["kind"] == "video"),
                     "done": bool(mem), "importance": mem["importance"] if mem else 0,
                     "content": mem["content"] if mem else True,
-                    "hidden": sum(1 for m in ev if m["id"] in with_hidden)})  # photos/videos with people you hid
+                    "hidden": sum(1 for m in ev if m["id"] in with_hidden),  # photos/videos with people you hid
+                    "allowed": sum(1 for m in ev if m["id"] in allowed)})  # ...that you allowed in this memory
     return {"events": out, "done": sum(1 for e in out if e["done"]), "feelings": FEELINGS,
             "with_hidden": sum(1 for e in out if e["hidden"])}
 
@@ -76,8 +78,17 @@ def _media_with_hidden_people(conn) -> set[str]:
     if not hidden:
         return set()
     marks = ",".join("?" * len(hidden))
-    return {r[0] for r in conn.execute(f"SELECT DISTINCT media_id FROM faces WHERE person_id IN ({marks})",
-                                       [int(x) for x in hidden])}
+    found = {r[0] for r in conn.execute(f"SELECT DISTINCT media_id FROM faces WHERE person_id IN ({marks})",
+                                        [int(x) for x in hidden])}
+    for mid in found & _media_with(conn, "allow"):  # allowed there: only counts if someone else hidden is in it
+        if not photo_has_hidden_person(conn, mid, hidden):
+            found.discard(mid)
+    return found
+
+
+def _media_with(conn, decision: str) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT DISTINCT media_id FROM face_reviews WHERE decision=? AND undone=0",
+                                       (decision,))}
 
 
 def _find(cfg: Config, conn, event_id: str) -> list | None:
@@ -124,6 +135,8 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
             "seen": [x["description"] for x in moments if x["description"]][:4],
             "hidden_people": _names_in(conn, m, hidden) if is_hidden else [],
             "hidden_faces": hidden_faces(conn, m["id"]) if is_hidden else [],  # who was recognised, to check
+            "reviews": reviews_for(conn, m["id"]),  # decisions about hidden tags here (undoable)
+            "faces": media_faces(conn, m["id"]),    # who's in it, to name or fix
         })
     ids = [m["id"] for m in ev]
     marks = ",".join("?" * len(ids))

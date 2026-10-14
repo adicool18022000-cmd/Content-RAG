@@ -480,17 +480,27 @@ def make_handler(cfg: Config, job: Job):
                     return self._json({"error": str(e)}, 400)
                 finally:
                     conn.close()
-            if url.path in ("/api/faces/retag", "/api/faces/recheck"):
-                from .faces import recheck_hidden, retag_faces
+            if url.path in ("/api/faces/retag", "/api/faces/recheck", "/api/faces/allow", "/api/faces/undo",
+                            "/api/faces/name"):
+                from .faces import allow_hidden, name_faces, recheck_hidden, retag_faces, undo_review
 
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 conn = connect(cfg.db_path)
                 try:
                     if url.path == "/api/faces/recheck":
                         return self._json(recheck_hidden(conn))
+                    if url.path == "/api/faces/undo":
+                        return self._json(undo_review(conn, int(body.get("review_id") or 0)))
+                    if url.path == "/api/faces/name":
+                        fids = [int(x) for x in body.get("face_ids") or [] if str(x).isdigit()]
+                        if not fids or not str(body.get("new_name") or "").strip():
+                            return self._json({"error": "say who it is"}, 400)
+                        return self._json(name_faces(cfg, conn, fids, str(body["new_name"])))
                     mids = [m for m in body.get("media_ids") or [] if re.fullmatch(r"[0-9a-f]{20}", str(m))]
                     if not mids or not body.get("person"):
                         return self._json({"error": "nothing to change"}, 400)
+                    if url.path == "/api/faces/allow":
+                        return self._json(allow_hidden(conn, mids, str(body["person"])))
                     return self._json(retag_faces(cfg, conn, mids, str(body["person"]), body.get("new_name") or None))
                 except SystemExit as e:
                     return self._json({"error": str(e)}, 400)

@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS usage (          -- which part of which clip went int
 );
 CREATE INDEX IF NOT EXISTS usage_media ON usage(media_id);
 
+CREATE TABLE IF NOT EXISTS face_reviews (   -- what the creator decided about a "hidden person" tag (undoable)
+    id        INTEGER PRIMARY KEY,
+    media_id  TEXT NOT NULL,
+    name      TEXT,                          -- the person it was about
+    decision  TEXT NOT NULL,                 -- not | renamed | auto | allow (= hidden, but OK to use here)
+    new_name  TEXT,
+    moves     TEXT,                          -- JSON [[face_id, old person_id], ...] to undo
+    at        TEXT DEFAULT CURRENT_TIMESTAMP,
+    undone    INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS face_reviews_media ON face_reviews(media_id);
+
 CREATE TABLE IF NOT EXISTS content_off (    -- clips of memories marked "not for content"
     media_id TEXT PRIMARY KEY,
     memory   TEXT                           -- the memory note that says so

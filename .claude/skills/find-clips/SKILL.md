@@ -23,6 +23,9 @@ The Obsidian vault (`library_dir/LifeVault`) has the same moments organised for 
 3. Read the JSON: `roles`, `hook_score`, `broll_score`, `uses`/`used_in` (prefer fresh), `story_seed`,
    `trimmed_for_privacy` (a hidden person was cut out of this range - keep the given in/out).
    Hidden people/clips/collections never appear; don't try to work around that.
+   **Allowed exceptions.** A result with `allowed_people` shows a hidden person the creator allowed for
+   that memory (e.g. the sketch they made for a friend's birthday). Use it only when the reel is
+   about that memory, and mention it: "m210 has Manya in it, which you allowed for this memory".
    **Held back.** Moments where a hidden person is on screen are left out by default. Run the same
    search with `--held-back` too. If one of those is clearly better than what you found, mention it
    briefly, without suggesting it as a pick: "m88 (Goa sunset) would fit well, but Richa is in it;

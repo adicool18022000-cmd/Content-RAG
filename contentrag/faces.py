@@ -395,31 +395,77 @@ def _others(conn, hidden: list[int]) -> tuple[list[int], np.ndarray]:
 
 
 def hidden_faces(conn, media_id: str, limit: int = 4) -> list[dict]:
-    """The faces in one photo/video that are tagged as a hidden person (clearest first)."""
+    """The faces in one photo/video tagged as a hidden person (clearest first), except people the
+    creator allowed in it."""
+    from .usage import allowed_here
+
+    allowed = {int(x) for x in allowed_here(conn, media_id)}
     return [dict(r) for r in conn.execute(
         "SELECT f.id, f.t, f.person_id, coalesce(p.name, 'person ' || p.id) AS name FROM faces f "
         "JOIN people p ON p.id=f.person_id WHERE f.media_id=? AND p.hidden=1 "
-        "ORDER BY coalesce(f.score, 0) DESC LIMIT ?", (media_id, limit))]
+        "ORDER BY coalesce(f.score, 0) DESC", (media_id,)) if r["person_id"] not in allowed][:limit]
 
 
-def _move(conn, face_ids: list[int], to: int | None) -> None:
+def _move(conn, face_ids: list[int], to: int | None) -> list[list]:
+    """Move faces to another group (None = no group). Returns [[face_id, old group], ...] for undo."""
+    moves = []
     for fid in face_ids:
         old = conn.execute("SELECT person_id FROM faces WHERE id=?", (fid,)).fetchone()
-        if old is None:
+        if old is None or old["person_id"] == to:
             continue
+        moves.append([fid, old["person_id"]])
         conn.execute("UPDATE faces SET person_id=? WHERE id=?", (to, fid))
         if old["person_id"]:
             conn.execute("UPDATE people SET faces=max(0, coalesce(faces,1)-1) WHERE id=?", (old["person_id"],))
         if to:
             conn.execute("UPDATE people SET faces=coalesce(faces,0)+1 WHERE id=?", (to,))
+    return moves
+
+
+def _log(conn, media_id: str, name: str | None, decision: str, moves: list | None = None,
+         new_name: str | None = None) -> None:
+    import json
+
+    conn.execute("INSERT INTO face_reviews(media_id, name, decision, new_name, moves) VALUES (?,?,?,?,?)",
+                 (media_id, name, decision, new_name, json.dumps(moves or [])))
+
+
+def _log_by_media(conn, moves: list, name: str | None, decision: str, new_name: str | None = None) -> None:
+    by_media: dict[str, list] = {}
+    for fid, old in moves:
+        m = conn.execute("SELECT media_id FROM faces WHERE id=?", (fid,)).fetchone()
+        if m:
+            by_media.setdefault(m["media_id"], []).append([fid, old])
+    for mid, mv in by_media.items():
+        _log(conn, mid, name, decision, mv, new_name)
+
+
+def _group_for(cfg: Config, conn, name: str, faces: list) -> int:
+    """The biggest group with this name, or a new one (hidden if that person is hidden)."""
+    row = conn.execute("SELECT id FROM people WHERE lower(name)=lower(?) ORDER BY faces DESC LIMIT 1",
+                       (name,)).fetchone()
+    if row:
+        return row["id"]
+    embs = np.vstack([_emb(f["emb"]) for f in faces]).mean(axis=0)
+    embs = (embs / (np.linalg.norm(embs) or 1.0)).astype(np.float32)
+    target = conn.execute("INSERT INTO people(faces, centroid) VALUES (0, ?)", (embs.tobytes(),)).lastrowid
+    name_person(conn, target, name)
+    _resample_from(cfg, conn, target, faces[0]["id"])
+    return target
+
+
+def _groups_named(conn, person: str) -> list[int]:
+    if person.startswith("person ") and person[7:].isdigit():
+        return [int(person[7:])]
+    return resolve_people(conn, person)
 
 
 def retag_faces(cfg: Config, conn, media_ids: list[str], person: str, new_name: str | None = None) -> dict:
-    """Fix a wrong hidden-person tag in these photos/videos. `person` is the name (or group id) shown.
+    """Fix a wrong hidden-person tag in these photos/videos. `person` is the name (or "person 12") shown.
     Without new_name ("not them"): each face goes to the not-hidden group it looks most like, or to
     no group. With new_name ("this is ..."): the faces go to that person's biggest group (a new group
-    with that name if there is none; it stays hidden only if that person is hidden)."""
-    groups = resolve_people(conn, person) if not person.startswith("person ") else [int(person.split()[1])]
+    with that name if there is none; it stays hidden only if that person is hidden). Undoable."""
+    groups = _groups_named(conn, person)
     gm = ",".join("?" * len(groups))
     mm = ",".join("?" * len(media_ids))
     faces = conn.execute(f"SELECT id, emb FROM faces WHERE media_id IN ({mm}) AND person_id IN ({gm})",
@@ -427,19 +473,11 @@ def retag_faces(cfg: Config, conn, media_ids: list[str], person: str, new_name: 
     if not faces:
         return {"moved": 0}
     hidden = [r["id"] for r in conn.execute("SELECT id FROM people WHERE hidden=1")]
+    moves: list = []
     if new_name and new_name.strip():
-        name = new_name.strip()
-        row = conn.execute("SELECT id FROM people WHERE lower(name)=lower(?) ORDER BY faces DESC LIMIT 1",
-                           (name,)).fetchone()
-        if row:
-            target = row["id"]
-        else:
-            embs = np.vstack([_emb(f["emb"]) for f in faces]).mean(axis=0)
-            embs = (embs / (np.linalg.norm(embs) or 1.0)).astype(np.float32)
-            target = conn.execute("INSERT INTO people(faces, centroid) VALUES (0, ?)", (embs.tobytes(),)).lastrowid
-            name_person(conn, target, name)
-            _resample_from(cfg, conn, target, faces[0]["id"])
-        _move(conn, [f["id"] for f in faces], target)
+        target = _group_for(cfg, conn, new_name.strip(), faces)
+        moves = _move(conn, [f["id"] for f in faces], target)
+        _log_by_media(conn, moves, person, "renamed", new_name.strip())
     else:
         ids, cents = _others(conn, hidden)
         for f in faces:
@@ -448,35 +486,118 @@ def retag_faces(cfg: Config, conn, media_ids: list[str], person: str, new_name: 
                 sims = cents @ _emb(f["emb"])
                 k = int(np.argmax(sims))
                 to = ids[k] if sims[k] >= SAME_PERSON else None
-            _move(conn, [f["id"]], to)
+            moves += _move(conn, [f["id"]], to)
+        _log_by_media(conn, moves, person, "not")
     conn.commit()
     return {"moved": len(faces)}
+
+
+def name_faces(cfg: Config, conn, face_ids: list[int], new_name: str) -> dict:
+    """"Who's in this picture?": put these faces under a name (tagging works both ways: naming a face
+    as a hidden person hides it again). Undoable."""
+    marks = ",".join("?" * len(face_ids))
+    faces = conn.execute(f"SELECT f.id, f.emb, coalesce(p.name, CASE WHEN p.id IS NULL THEN NULL "
+                         f"ELSE 'person ' || p.id END) AS name FROM faces f LEFT JOIN people p ON p.id=f.person_id "
+                         f"WHERE f.id IN ({marks})", face_ids).fetchall()
+    if not faces or not new_name.strip():
+        return {"moved": 0}
+    target = _group_for(cfg, conn, new_name.strip(), faces)
+    moves = _move(conn, [f["id"] for f in faces], target)
+    _log_by_media(conn, moves, faces[0]["name"], "renamed", new_name.strip())
+    conn.commit()
+    return {"moved": len(moves)}
+
+
+def allow_hidden(conn, media_ids: list[str], person: str) -> dict:
+    """"It's them, but OK to use here": the person stays hidden everywhere else; in these photos/videos
+    they no longer remove or blur anything. Undoable."""
+    done = 0
+    for mid in media_ids:
+        if not conn.execute("SELECT 1 FROM face_reviews WHERE media_id=? AND decision='allow' AND undone=0 "
+                            "AND lower(name)=lower(?)", (mid, person)).fetchone():
+            _log(conn, mid, person, "allow")
+            done += 1
+    conn.commit()
+    return {"allowed": done}
+
+
+def undo_review(conn, review_id: int) -> dict:
+    import json
+
+    r = conn.execute("SELECT * FROM face_reviews WHERE id=? AND undone=0", (review_id,)).fetchone()
+    if r is None:
+        return {"undone": 0}
+    for fid, old in json.loads(r["moves"] or "[]"):
+        _move(conn, [fid], old)
+    conn.execute("UPDATE face_reviews SET undone=1 WHERE id=?", (review_id,))
+    conn.commit()
+    return {"undone": 1, "decision": r["decision"]}
+
+
+def reviews_for(conn, media_id: str) -> list[dict]:
+    """Decisions about hidden tags in this photo/video that still apply (a later change that put the
+    faces back where they were makes an earlier one moot)."""
+    import json
+
+    out = []
+    for r in conn.execute("SELECT id, name, decision, new_name, at, moves FROM face_reviews "
+                          "WHERE media_id=? AND undone=0 ORDER BY id", (media_id,)):
+        moves = json.loads(r["moves"] or "[]")
+        if moves and all((conn.execute("SELECT person_id FROM faces WHERE id=?", (fid,)).fetchone() or {"person_id": old})
+                         ["person_id"] == old for fid, old in moves):
+            continue
+        out.append({k: r[k] for k in ("id", "name", "decision", "new_name", "at")})
+    return out
+
+
+def media_faces(conn, media_id: str, limit: int = 8) -> list[dict]:
+    """Who's in this photo/video: one face per group (clearest), plus faces not in any group."""
+    out, seen = [], set()
+    for r in conn.execute(
+            "SELECT f.id, f.person_id, p.name, coalesce(p.hidden, 0) AS hidden FROM faces f "
+            "LEFT JOIN people p ON p.id=f.person_id WHERE f.media_id=? ORDER BY coalesce(f.score, 0) DESC",
+            (media_id,)):
+        key = r["person_id"] or f"f{r['id']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": r["id"], "name": r["name"] or (f"person {r['person_id']}" if r["person_id"] else None),
+                    "hidden": bool(r["hidden"])})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def recheck_hidden(conn, margin: float = 0.0) -> dict:
     """Go over every face tagged as a hidden person (no rescanning, the stored face features are
     enough): a face that looks more like someone who isn't hidden (you, a friend) than like the
-    hidden person is moved to that person. Clear matches stay hidden."""
+    hidden person is moved to that person. Clear matches stay hidden. Logged per photo/video
+    (decision "auto"), so each one can be undone."""
     hidden = [r["id"] for r in conn.execute("SELECT id FROM people WHERE hidden=1")]
     if not hidden:
         return {"checked": 0, "moved": 0}
     hm = ",".join("?" * len(hidden))
     hid = {r["id"]: _emb(r["centroid"]) for r in conn.execute(
         f"SELECT id, centroid FROM people WHERE id IN ({hm}) AND centroid IS NOT NULL", hidden)}
+    names = {r["id"]: r["name"] or f"person {r['id']}" for r in conn.execute(
+        f"SELECT id, name FROM people WHERE id IN ({hm})", hidden)}
     ids, cents = _others(conn, hidden)
     if not len(ids) or not hid:
         return {"checked": 0, "moved": 0}
     hcents = np.vstack(list(hid.values()))
     checked = moved = 0
-    for f in conn.execute(f"SELECT id, emb FROM faces WHERE person_id IN ({hm})", hidden).fetchall():
+    by_name: dict[str, list] = {}
+    for f in conn.execute(f"SELECT id, emb, person_id FROM faces WHERE person_id IN ({hm})", hidden).fetchall():
         checked += 1
         e = _emb(f["emb"])
         best_hidden = float((hcents @ e).max())
         sims = cents @ e
         k = int(np.argmax(sims))
         if sims[k] >= SAME_PERSON and sims[k] > best_hidden + margin:
-            _move(conn, [f["id"]], ids[k])
+            by_name.setdefault(names.get(f["person_id"]), []).extend(_move(conn, [f["id"]], ids[k]))
             moved += 1
+    for name, mv in by_name.items():
+        _log_by_media(conn, mv, name, "auto")
     conn.commit()
     return {"checked": checked, "moved": moved}
 

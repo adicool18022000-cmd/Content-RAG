@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Config
 from .db import jloads
-from .usage import (collection_hidden, hidden_people_in, hidden_ranges, hidden_sets, photo_has_hidden_person,
+from .usage import (allowed_names, collection_hidden, hidden_people_in, hidden_ranges, hidden_sets, photo_has_hidden_person,
                     safe_parts, uses_of)
 from .util import fmt_ts, source_path
 
@@ -180,6 +180,7 @@ def search(cfg: Config, conn, query: str = "", filters: Filters | None = None, l
         rank = (scores[r["id"]] if scores else 1.0) / (1 + USE_PENALTY * len(uses))
         results.append((rank, -(r["hook_score"] or 0), -(r["broll_score"] or 0),
                         _result(cfg, conn, r, start, end, trimmed, uses)
+                        | ({"allowed_people": ap} if hidden["person"] and (ap := allowed_names(conn, r["media_id"])) else {})
                         | ({"held_back": True, "hidden_people": names} if filters.held_back else {})))
     results.sort(key=lambda x: (-x[0], x[1], x[2]))
     return [x[3] for x in results[:limit]]

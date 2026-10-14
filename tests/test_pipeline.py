@@ -751,6 +751,25 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
     assert hidden_ranges(conn, goa)
     assert retag_faces(cfg, conn, [goa], "Ex")["moved"] >= 4  # "not her": to whoever they look like, or no one
     assert not hidden_ranges(conn, goa)
+    # every decision is logged and can be undone
+    from contentrag.faces import allow_hidden, media_faces, name_faces, reviews_for, undo_review
+    from contentrag.usage import face_boxes as _fb
+
+    rv = reviews_for(conn, goa)
+    assert [r["decision"] for r in rv][-1] == "not"
+    assert undo_review(conn, rv[-1]["id"])["undone"] == 1 and hidden_ranges(conn, goa)
+    # "it's her, but OK to use in this memory": usable (not cut, not blurred) here, still hidden elsewhere
+    assert allow_hidden(conn, [goa], "Ex")["allowed"] == 1
+    assert not hidden_ranges(conn, goa) and not _fb(conn, goa, 0, 12) and not hidden_faces(conn, goa)
+    res = [r for r in search(cfg, conn, "", Filters(kind="video"), use_vectors=False, limit=200) if r["media_id"] == goa]
+    assert res and all(r.get("allowed_people") == ["Ex"] for r in res)
+    undo_review(conn, next(r["id"] for r in reviews_for(conn, goa) if r["decision"] == "allow"))
+    assert hidden_ranges(conn, goa)
+    # "who's in this picture?": a face that lost its tag can be named again (here: back to her)
+    retag_faces(cfg, conn, [goa], "Ex")
+    assert not hidden_ranges(conn, goa)
+    lost = [f for f in media_faces(conn, goa) if not f["hidden"]]
+    assert lost and name_faces(cfg, conn, [lost[0]["id"]], "Ex")["moved"] == 1 and hidden_ranges(conn, goa)
 
     # photos with a hidden person never appear
     photo = conn.execute("SELECT id FROM media WHERE kind='photo' LIMIT 1").fetchone()["id"]

@@ -98,9 +98,33 @@ def collection_hidden(collection: str | None, hidden_collections: set[str]) -> b
     return any(collection == h or collection.startswith(h + " / ") for h in hidden_collections)
 
 
+def allowed_here(conn, media_id: str) -> set[str]:
+    """Hidden people the creator allowed in this photo/video ("it's her, but OK to use here")."""
+    names = [r["name"] for r in conn.execute(
+        "SELECT name FROM face_reviews WHERE media_id=? AND decision='allow' AND undone=0", (media_id,))]
+    out: set[str] = set()
+    for n in names:
+        if n and n.startswith("person ") and n[7:].isdigit():
+            out.add(n[7:])
+        elif n:
+            out |= {str(r["id"]) for r in conn.execute("SELECT id FROM people WHERE lower(name)=lower(?)", (n,))}
+    return out
+
+
+def allowed_names(conn, media_id: str) -> list[str]:
+    return [r["name"] for r in conn.execute(
+        "SELECT DISTINCT name FROM face_reviews WHERE media_id=? AND decision='allow' AND undone=0", (media_id,))]
+
+
+def _except_allowed(conn, media_id: str, people: set[str]) -> set[str]:
+    allowed = allowed_here(conn, media_id) if people else set()
+    return people - allowed if allowed else people
+
+
 def hidden_ranges(conn, media_id: str, people: set[str] | None = None) -> list[tuple[float, float]]:
     """Time ranges of a clip where a hidden person is on screen (from face grouping)."""
     people = hidden_sets(conn)["person"] if people is None else people
+    people = _except_allowed(conn, media_id, people)
     if not people:
         return []
     marks = ",".join("?" * len(people))
@@ -119,6 +143,7 @@ def face_boxes(conn, media_id: str, start: float, end: float, people: set[str] |
     """Where hidden people's faces are between start and end of a clip:
     [(t, x, y, w, h)] with t in source seconds and x/y/w/h as fractions of the picture."""
     people = hidden_sets(conn)["person"] if people is None else people
+    people = _except_allowed(conn, media_id, people)
     if not people:
         return []
     m = conn.execute("SELECT width, height FROM media WHERE id=?", (media_id,)).fetchone()
@@ -142,6 +167,7 @@ def face_boxes(conn, media_id: str, start: float, end: float, people: set[str] |
 def hidden_people_in(conn, media_id: str, start: float, end: float, people: set[str] | None = None) -> list[str]:
     """Names of the hidden people on screen between start and end (one name per person)."""
     people = hidden_sets(conn)["person"] if people is None else people
+    people = _except_allowed(conn, media_id, people)
     if not people:
         return []
     marks = ",".join("?" * len(people))
@@ -169,6 +195,7 @@ def frame_box(box: tuple, src_w: int, src_h: int, out_w: int, out_h: int, mode: 
 
 def photo_has_hidden_person(conn, media_id: str, people: set[str] | None = None) -> bool:
     people = hidden_sets(conn)["person"] if people is None else people
+    people = _except_allowed(conn, media_id, people)
     if not people:
         return False
     marks = ",".join("?" * len(people))

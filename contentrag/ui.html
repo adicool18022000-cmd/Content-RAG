@@ -357,7 +357,32 @@ summary::-webkit-details-marker { display: none; }
 .facefix.dark { color: #fff; }
 .facefix.dark .btn { background: rgba(255,255,255,.14); color: #fff; }
 .facefix.dark .field { background: rgba(255,255,255,.12); color: #fff; }
-.lb-fix { padding: 10px 16px 14px; }
+.facefix.ok { background: rgba(48, 176, 199, .14); border-color: rgba(48, 176, 199, .55); }
+.facefix.ck { background: rgba(10, 132, 255, .08); border-color: rgba(10, 132, 255, .35); }
+.ff-day { font-size: 13px; font-weight: 400; }
+.whois { margin-top: 8px; }
+.whois summary { cursor: pointer; font-size: 13px; color: var(--secondary); }
+.whois.dark summary { color: rgba(255,255,255,.7); }
+.whois-list { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
+.whois-face { display: grid; gap: 4px; justify-items: start; }
+.whois-face img { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; background: #222; }
+.whois-face .wf-name { font-size: 13px; }
+.whois-face .ff-rename .field { width: 120px; }
+.whois.dark .field { background: rgba(255,255,255,.12); color: #fff; }
+.whois.dark .btn { background: rgba(255,255,255,.14); color: #fff; }
+.collage .tile.ok { outline: 3px solid #30b0c7; outline-offset: -3px; }
+.collage .tile.ck { outline: 2px dashed #0a84ff; outline-offset: -2px; }
+.collage .hpl.ok { background: #30b0c7; color: #fff; }
+.collage .hpl.ck { background: #0a84ff; color: #fff; }
+.strip button.ok { border-color: #30b0c7; }
+.strip button.ck { border-color: #0a84ff; border-style: dashed; }
+.strip button.ok::after, .strip button.ck::after { position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 600;
+  border-radius: 5px; padding: 0 4px; color: #fff; }
+.strip button.ok::after { content: "allowed"; background: #30b0c7; }
+.strip button.ck::after { content: "checked"; background: #0a84ff; }
+.mem-ev.ok { background: rgba(48, 176, 199, .12); box-shadow: inset 3px 0 0 #30b0c7; }
+.mem-ev .okt { color: #1d8ea3; font-weight: 600; }
+.lb-fix { padding: 10px 16px 14px; max-height: 42vh; overflow-y: auto; }
 .lb-fix:empty { display: none; }
 .collage .tile.hp { outline: 3px solid #ffcc00; outline-offset: -3px; }
 .collage .hpl { position: absolute; left: 8px; bottom: 8px; background: #ffcc00; color: #000; font-size: 12px;
@@ -630,10 +655,10 @@ function renderMemList() {
     if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden)) return;
     const m = e.date.slice(0, 7);
     if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
-    html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}${e.hidden ? " hp" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
+    html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}${e.hidden ? " hp" : e.allowed ? " ok" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
       <span class="tick" title="${e.done ? (e.content === false ? "Not for content" : "Told") : "Not told yet"}"></span>
       <span style="min-width:0"><div class="t">${esc(e.date.slice(8))} · ${esc(e.place || e.title)}</div>
-      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}${e.hidden ? ` · <span class="hpt">${e.hidden} with hidden people</span>` : ""}</div></span></button>`;
+      <div class="s">${esc(e.title)} · ${e.items} item${e.items === 1 ? "" : "s"}${e.importance ? " · " + "★".repeat(e.importance) : ""}${e.hidden ? ` · <span class="hpt">${e.hidden} with hidden people</span>` : ""}${e.allowed ? ` · <span class="okt">${e.allowed} allowed</span>` : ""}</div></span></button>`;
   });
   $("memList").innerHTML = html || `<div class="empty" style="padding:24px">Nothing here.</div>`;
   const list = $("memList"), cur = list.querySelector('[aria-current="true"]');
@@ -669,7 +694,7 @@ function renderEvent() {
         <div class="sub">${esc(timeRange)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length} photo${ev.items.length === 1 ? "" : "s"}/video${ev.items.length === 1 ? "" : "s"}</div></div>
       <div class="row-actions"><button class="btn" type="button" id="mPrev">‹ Earlier</button><button class="btn" type="button" id="mNext">Later ›</button></div></div>
     ${ev.items.length ? `<div class="stage" id="mStage"></div><div class="strip" id="mStrip" aria-label="Photos and videos in this event">${ev.items.map((it, k) =>
-      `<button type="button" data-k="${k}" aria-current="${k === 0}"${it.hidden_people && it.hidden_people.length ? ' class="hp"' : ""} title="${esc(it.time + " " + (it.title || "") + (it.hidden_people && it.hidden_people.length ? " · with " + it.hidden_people.join(", ") : ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
+      `<button type="button" data-k="${k}" aria-current="${k === 0}"${mark(it) ? ` class="${mark(it)}"` : ""} title="${esc(it.time + " " + (it.title || "") + (it.hidden_people && it.hidden_people.length ? " · with " + it.hidden_people.join(", ") : ""))}">${it.thumb ? `<img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">` : ""}<span class="k">${it.kind === "video" ? "▶ " + fmtDur(it.duration) : it.time}</span></button>`).join("")}</div>
       <div class="caption" id="mCaption"></div>` : `<div class="notice">All items of this event include people you've hidden.</div>`}
     ${ev.held_back ? `<div class="notice hp" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="flex:1;min-width:220px"><b>${ev.held_back} photo${ev.held_back === 1 ? "" : "s"}/video${ev.held_back === 1 ? "" : "s"} with people you've hidden</b>
@@ -1033,11 +1058,18 @@ function renderStorySlide(ev) {
   const hidNames = [...new Set(ev.items.flatMap(x => x.hidden_people || []))];
   $("sCap").innerHTML = `<div class="when">${esc(fmtDate(ev.date))}</div>
     <div class="what">${esc(ev.time)}${ev.place ? " · " + esc(ev.place) : ""} · ${total} photo${total === 1 ? "" : "s"}/video${total === 1 ? "" : "s"}${ev.people_seen.length ? " · with " + esc(ev.people_seen.slice(0, 4).join(", ")) : ""}</div>
-    ${ev.held_back ? `<div class="what story-hp">Yellow frame = recognised as someone you hid (${esc(hidNames.join(", "))}). Wrong person? Click the picture to fix it.</div>` : ""}
+    ${ev.held_back ? `<div class="what story-hp">Yellow frame = recognised as someone you hid (${esc(hidNames.join(", "))}). Click the picture: wrong person, or OK to use in this memory.</div>` : ""}
+    ${ev.items.some(x => mark(x) === "ok") ? `<div class="what" style="color:#5ac8de">Teal frame = someone you hid, allowed in this memory by you.</div>` : ""}
     <div class="what" style="color:rgba(255,255,255,.5)">${esc(ev.items.slice(0, 3).map(x => x.title).filter(Boolean).join(" · "))}${said.length ? " · “" + esc(said[0]) + "”" : ""}</div>`;
 }
-const hp = (it) => it.hidden_people && it.hidden_people.length ? " hp" : "";
-const hpl = (it) => hp(it) ? `<span class="hpl">Hidden: ${esc(it.hidden_people.join(", "))}</span>` : "";
+// yellow = recognised as someone you hid; teal = you allowed them in this memory; blue dashed = you checked it
+const mark = (it) => it.hidden_people && it.hidden_people.length ? "hp"
+  : (it.reviews || []).some(r => r.decision === "allow") ? "ok" : (it.reviews || []).length ? "ck" : "";
+const hp = (it) => mark(it) ? " " + mark(it) : "";
+const hpl = (it) => { const m = mark(it); if (!m) return "";
+  const txt = m === "hp" ? "Hidden: " + it.hidden_people.join(", ")
+    : m === "ok" ? "Allowed: " + [...new Set(it.reviews.filter(r => r.decision === "allow").map(r => r.name))].join(", ") : "Checked";
+  return `<span class="hpl ${m}">${esc(txt)}</span>`; };
 function storyGo(d) {
   if (STORY.pos + d >= STORY.order.length) { toast("That was the last event. Press Finish when you're done."); return; }
   showStoryEvent(STORY.pos + d);
@@ -1268,41 +1300,76 @@ async function peopleNames() {
   return PEOPLE_NAMES;
 }
 function faceFixHtml(it, evItems, dark) {
-  if (!it || !it.hidden_faces || !it.hidden_faces.length) return "";
+  if (!it) return "";
   peopleNames();
-  const byName = {}; it.hidden_faces.forEach(f => (byName[f.name] = byName[f.name] || []).push(f));
-  return Object.entries(byName).map(([name, fs]) => {
+  const d = dark ? " dark" : "";
+  let html = "";
+  // 1. recognised as someone you hid: what is it really?
+  const byName = {}; (it.hidden_faces || []).forEach(f => (byName[f.name] = byName[f.name] || []).push(f));
+  for (const [name, fs] of Object.entries(byName)) {
     const day = (evItems || []).filter(x => (x.hidden_people || []).includes(name)).length;
-    return `<div class="facefix${dark ? " dark" : ""}" data-person="${esc(name)}" data-mid="${it.id}">
+    html += `<div class="facefix${d}" data-person="${esc(name)}" data-mid="${it.id}">
       <div class="faces">${fs.slice(0, 3).map(f => `<img src="/api/face/${f.id}" alt="Recognised face" loading="lazy">`).join("")}</div>
-      <div class="ff-body"><div>Recognised as <b>${esc(name)}</b>, who you've hidden. Is that right?</div>
+      <div class="ff-body"><div>Recognised as <b>${esc(name)}</b>, who you've hidden.</div>
         <div class="ff-actions">
-          <button class="btn small" type="button" data-act="not">Not ${esc(name)}</button>
-          ${day > 1 ? `<button class="btn small" type="button" data-act="notday">Not ${esc(name)} in any of this day's ${day}</button>` : ""}
-          <span class="ff-rename"><input class="field" list="peopleList" placeholder="This is…" data-new aria-label="Who is it?">
+          <button class="btn small" type="button" data-act="allow" title="${esc(name)} stays hidden everywhere else">It's ${esc(name)}, but OK to use in this memory</button>
+          <button class="btn small" type="button" data-act="not">It's not ${esc(name)}</button>
+          <span class="ff-rename"><input class="field" list="peopleList" placeholder="It's someone else…" data-new aria-label="Who is it?">
             <button class="btn small" type="button" data-act="rename">Save</button></span>
-        </div></div></div>`;
-  }).join("");
+        </div>
+        ${day > 1 ? `<label class="check ff-day"><input type="checkbox" data-day> Do the same for all ${day} pictures of this day with ${esc(name)}</label>` : ""}
+      </div></div>`;
+  }
+  // 2. what you decided here before (undoable)
+  for (const r of it.reviews || []) {
+    const txt = r.decision === "allow" ? `<b>${esc(r.name)}</b> is in this picture. You allowed it for this memory, so it can be used (${esc(r.name)} stays hidden everywhere else).`
+      : r.decision === "auto" ? `Checked automatically: not <b>${esc(r.name)}</b> (looked more like someone else).`
+      : r.decision === "renamed" ? `You tagged a face here as <b>${esc(r.new_name)}</b>${r.name ? ` (it was ${esc(r.name)})` : ""}.`
+      : `You said this is not <b>${esc(r.name)}</b>.`;
+    html += `<div class="facefix ${r.decision === "allow" ? "ok" : "ck"}${d}"><div class="ff-body"><div>${txt}</div></div>
+      <button class="btn small" type="button" data-act="undo" data-review="${r.id}">Undo</button></div>`;
+  }
+  // 3. every face in it: name it, or put a lost tag back
+  if ((it.faces || []).length) {
+    html += `<details class="whois${d}"><summary>Who's in this picture? (${it.faces.length} face${it.faces.length === 1 ? "" : "s"})</summary>
+      <div class="whois-list">${it.faces.map(f => `<div class="whois-face" data-face="${f.id}">
+        <img src="/api/face/${f.id}" alt="" loading="lazy"><div class="wf-name">${f.name ? esc(f.name) : "Unknown"}${f.hidden ? " · hidden" : ""}</div>
+        <span class="ff-rename"><input class="field" list="peopleList" placeholder="This is…" data-new aria-label="Who is it?">
+          <button class="btn small" type="button" data-act="name">Save</button></span></div>`).join("")}</div></details>`;
+  }
+  return html;
 }
 document.addEventListener("click", async (e) => {
-  const b = e.target.closest(".facefix [data-act]"); if (!b) return;
-  const box = b.closest(".facefix"), person = box.dataset.person, act = b.dataset.act;
-  const items = LB.open ? LB.items : (MEM.ev ? MEM.ev.items : []);
-  let mids = [box.dataset.mid], new_name = null;
-  if (act === "notday") mids = items.filter(x => (x.hidden_people || []).includes(person)).map(x => x.id);
-  if (act === "rename") { new_name = box.querySelector("[data-new]").value.trim(); if (!new_name) { toast("Type who it is first"); return; } }
+  const b = e.target.closest(".facefix [data-act], .whois [data-act]"); if (!b) return;
+  const act = b.dataset.act, items = LB.open ? LB.items : (MEM.ev ? MEM.ev.items : []);
+  let url, body, msg;
+  if (act === "undo") { url = "/api/faces/undo"; body = {review_id: +b.dataset.review}; msg = "Undone"; }
+  else if (act === "name") {
+    const f = b.closest("[data-face]"), n = f.querySelector("[data-new]").value.trim();
+    if (!n) { toast("Type who it is first"); return; }
+    url = "/api/faces/name"; body = {face_ids: [+f.dataset.face], new_name: n}; msg = `Tagged as ${n}`;
+  } else {
+    const box = b.closest(".facefix"), person = box.dataset.person, day = box.querySelector("[data-day]");
+    const mids = day && day.checked ? items.filter(x => (x.hidden_people || []).includes(person)).map(x => x.id) : [box.dataset.mid];
+    const pics = `${mids.length} picture${mids.length === 1 ? "" : "s"}`;
+    body = {media_ids: mids, person};
+    if (act === "allow") { url = "/api/faces/allow"; msg = `${person} allowed in this memory (${pics}); still hidden everywhere else`; }
+    else if (act === "not") { url = "/api/faces/retag"; msg = `Not ${person}: ${pics} back in your story`; }
+    else { const n = box.querySelector("[data-new]").value.trim(); if (!n) { toast("Type who it is first"); return; }
+      url = "/api/faces/retag"; body.new_name = n; msg = `Tagged as ${n} (${pics})`; }
+  }
   b.disabled = true;
-  const j = await (await post("/api/faces/retag", {media_ids: mids, person, new_name})).json().catch(() => ({error: "failed"}));
+  const j = await (await post(url, body)).json().catch(() => ({error: "failed"}));
   if (j.error) { toast(j.error); b.disabled = false; return; }
-  PEOPLE_NAMES = null;
-  toast(new_name ? `Tagged as ${new_name}` : `Not ${person}: ${mids.length} picture${mids.length === 1 ? "" : "s"} back in your story`);
+  PEOPLE_NAMES = null; toast(msg);
   await refreshAfterRetag();
 });
 async function refreshAfterRetag() {
   if (STORY.live) {
     const i = STORY.order[STORY.pos]; delete STORY.cache[MEM.events[i].id];
     const ev = await eventData(i); if (!ev) return;
-    MEM.events[i].hidden = ev.held_back; renderStorySlide(ev);
+    MEM.events[i].hidden = ev.held_back; MEM.events[i].allowed = ev.items.filter(x => mark(x) === "ok").length;
+    renderStorySlide(ev);
     if (LB.open) { LB.items = ev.items; lbShow(Math.min(LB.k, ev.items.length - 1)); }
     return;
   }
@@ -1310,7 +1377,8 @@ async function refreshAfterRetag() {
   const k = MEM.item, lbk = LB.k, lb = LB.open;
   if ($("mStory") && ($("mStory").value.trim() || $("mMeaning").value.trim())) { MEM.dirty = true; saveDraft(); }
   await openEvent(MEM.idx);
-  if (MEM.ev) { MEM.events[MEM.idx].hidden = MEM.ev.held_back; renderMemList(); showItem(Math.min(k, MEM.ev.items.length - 1)); }
+  if (MEM.ev) { MEM.events[MEM.idx].hidden = MEM.ev.held_back;
+    MEM.events[MEM.idx].allowed = MEM.ev.items.filter(x => mark(x) === "ok").length; renderMemList(); showItem(Math.min(k, MEM.ev.items.length - 1)); }
   if (lb && MEM.ev) { LB.items = MEM.ev.items; lbShow(Math.min(lbk, LB.items.length - 1)); }
 }
 async function recheckTags() {
