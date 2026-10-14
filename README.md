@@ -414,6 +414,10 @@ How the vault learns what things meant (the "brain"):
   by Whisper on your Mac (pick Hindi, English, or Hindi → English text). macOS Dictation (Fn twice)
   works in the boxes too. Feeling, importance stars, people and life chapter are one click each.
   Save & next (⌘↵) writes the memory into the vault. Drafts are kept if you leave mid-way.
+  Pictures recognised as someone you've hidden have a yellow frame (in Story mode too). Open one to see
+  the face that was recognised: **Not <name>** (this picture or the whole day) or **This is…** fixes a wrong
+  tag and puts the picture back in your story. **Re-check all tags** (or `crag people recheck`) moves every
+  face that looks more like someone else (you, a friend) away from the hidden person in one go.
   Events with photos/videos of people you've hidden are yellow in the One by one timeline (filter: *With
   hidden people*). Story mode leaves those pictures out, but here you can review them (yellow frame, with
   who's in them) and tell that part too. They're still never used in videos unless you ask Claude for one.

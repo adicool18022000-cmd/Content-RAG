@@ -31,7 +31,8 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
 - Collections = the creator's folder names (`collections.py`); usage + hide list (`usage.py`);
   local face grouping with OpenCV YuNet/SFace (`faces.py`); a person = all face groups sharing a
   name (groups are never merged; `split_person` re-separates one); hidden people are removed by time
-  range, never by dropping whole clips. A held-back moment (`search --held-back`) is used only when
+  range, never by dropping whole clips. Wrong hidden tags: `faces.retag_faces` / `recheck_hidden` (dense matches must
+  also beat every non-hidden group). A held-back moment (`search --held-back`) is used only when
   the creator asks in chat; their face is then a blur layer in HyperFrames/Remotion (+ preview), never
   burned into footage or pulled clips.
 - Edit engine (`contentrag/edit/`): one `EditPlan` (plan.py) built by `talking.py` / `beat.py`,

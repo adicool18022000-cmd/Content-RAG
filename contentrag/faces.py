@@ -329,6 +329,7 @@ def refine_hidden(cfg: Config, conn, eng=None, log=print, stop=None) -> dict:
     marks = ",".join("?" * len(hidden))
     cents = np.vstack([_emb(r["centroid"]) for r in conn.execute(
         f"SELECT centroid FROM people WHERE id IN ({marks})", hidden)])
+    other_ids, other = _others(conn, hidden)
     clips = [r["media_id"] for r in conn.execute(
         f"SELECT DISTINCT f.media_id FROM faces f JOIN media m ON m.id=f.media_id WHERE f.person_id IN ({marks}) "
         "AND m.kind='video' AND coalesce(m.faces_dense,0)=0", hidden)]
@@ -347,7 +348,8 @@ def refine_hidden(cfg: Config, conn, eng=None, log=print, stop=None) -> dict:
                 for box, score, emb in eng.faces(frame):
                     sims = cents @ emb
                     k = int(np.argmax(sims))
-                    if sims[k] >= HIDDEN_MATCH:
+                    rival = float((other @ emb).max()) if len(other_ids) else -1.0
+                    if sims[k] >= HIDDEN_MATCH and sims[k] >= rival:  # not someone else who looks alike
                         conn.execute("INSERT INTO faces(media_id, t, x, y, w, h, score, emb, person_id) "
                                      "VALUES (?,?,?,?,?,?,?,?,?)",
                                      (mid, t, *box, score, emb.tobytes(), hidden[k]))
@@ -374,3 +376,157 @@ def _dense_frames(src: Path, out_dir: Path) -> list[tuple[float, Path]]:
     # frame n (1-based) of fps=F covers time (n-1)/F .. n/F; use its middle
     return [((int(p.stem[1:]) - 0.5) / DENSE_FPS, p) for p in frames]
 
+
+
+# ---------------------------------------------------------------- fixing wrong "hidden person" tags
+
+RECHECK_MIN_FACES = 5     # groups this big have a reliable average face to compare against
+
+
+def _others(conn, hidden: list[int]) -> tuple[list[int], np.ndarray]:
+    """Face groups of people who are NOT hidden (big enough to trust), to compare against."""
+    marks = ",".join("?" * len(hidden)) or "NULL"
+    rows = conn.execute(f"SELECT id, centroid FROM people WHERE centroid IS NOT NULL AND coalesce(hidden,0)=0 "
+                        f"AND id NOT IN ({marks}) AND (faces >= ? OR name IS NOT NULL)",
+                        (*hidden, RECHECK_MIN_FACES)).fetchall()
+    if not rows:
+        return [], np.zeros((0, 128), dtype=np.float32)
+    return [r["id"] for r in rows], np.vstack([_emb(r["centroid"]) for r in rows])
+
+
+def hidden_faces(conn, media_id: str, limit: int = 4) -> list[dict]:
+    """The faces in one photo/video that are tagged as a hidden person (clearest first)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT f.id, f.t, f.person_id, coalesce(p.name, 'person ' || p.id) AS name FROM faces f "
+        "JOIN people p ON p.id=f.person_id WHERE f.media_id=? AND p.hidden=1 "
+        "ORDER BY coalesce(f.score, 0) DESC LIMIT ?", (media_id, limit))]
+
+
+def _move(conn, face_ids: list[int], to: int | None) -> None:
+    for fid in face_ids:
+        old = conn.execute("SELECT person_id FROM faces WHERE id=?", (fid,)).fetchone()
+        if old is None:
+            continue
+        conn.execute("UPDATE faces SET person_id=? WHERE id=?", (to, fid))
+        if old["person_id"]:
+            conn.execute("UPDATE people SET faces=max(0, coalesce(faces,1)-1) WHERE id=?", (old["person_id"],))
+        if to:
+            conn.execute("UPDATE people SET faces=coalesce(faces,0)+1 WHERE id=?", (to,))
+
+
+def retag_faces(cfg: Config, conn, media_ids: list[str], person: str, new_name: str | None = None) -> dict:
+    """Fix a wrong hidden-person tag in these photos/videos. `person` is the name (or group id) shown.
+    Without new_name ("not them"): each face goes to the not-hidden group it looks most like, or to
+    no group. With new_name ("this is ..."): the faces go to that person's biggest group (a new group
+    with that name if there is none; it stays hidden only if that person is hidden)."""
+    groups = resolve_people(conn, person) if not person.startswith("person ") else [int(person.split()[1])]
+    gm = ",".join("?" * len(groups))
+    mm = ",".join("?" * len(media_ids))
+    faces = conn.execute(f"SELECT id, emb FROM faces WHERE media_id IN ({mm}) AND person_id IN ({gm})",
+                         (*media_ids, *groups)).fetchall()
+    if not faces:
+        return {"moved": 0}
+    hidden = [r["id"] for r in conn.execute("SELECT id FROM people WHERE hidden=1")]
+    if new_name and new_name.strip():
+        name = new_name.strip()
+        row = conn.execute("SELECT id FROM people WHERE lower(name)=lower(?) ORDER BY faces DESC LIMIT 1",
+                           (name,)).fetchone()
+        if row:
+            target = row["id"]
+        else:
+            embs = np.vstack([_emb(f["emb"]) for f in faces]).mean(axis=0)
+            embs = (embs / (np.linalg.norm(embs) or 1.0)).astype(np.float32)
+            target = conn.execute("INSERT INTO people(faces, centroid) VALUES (0, ?)", (embs.tobytes(),)).lastrowid
+            name_person(conn, target, name)
+            _resample_from(cfg, conn, target, faces[0]["id"])
+        _move(conn, [f["id"] for f in faces], target)
+    else:
+        ids, cents = _others(conn, hidden)
+        for f in faces:
+            to = None
+            if len(ids):
+                sims = cents @ _emb(f["emb"])
+                k = int(np.argmax(sims))
+                to = ids[k] if sims[k] >= SAME_PERSON else None
+            _move(conn, [f["id"]], to)
+    conn.commit()
+    return {"moved": len(faces)}
+
+
+def recheck_hidden(conn, margin: float = 0.0) -> dict:
+    """Go over every face tagged as a hidden person (no rescanning, the stored face features are
+    enough): a face that looks more like someone who isn't hidden (you, a friend) than like the
+    hidden person is moved to that person. Clear matches stay hidden."""
+    hidden = [r["id"] for r in conn.execute("SELECT id FROM people WHERE hidden=1")]
+    if not hidden:
+        return {"checked": 0, "moved": 0}
+    hm = ",".join("?" * len(hidden))
+    hid = {r["id"]: _emb(r["centroid"]) for r in conn.execute(
+        f"SELECT id, centroid FROM people WHERE id IN ({hm}) AND centroid IS NOT NULL", hidden)}
+    ids, cents = _others(conn, hidden)
+    if not len(ids) or not hid:
+        return {"checked": 0, "moved": 0}
+    hcents = np.vstack(list(hid.values()))
+    checked = moved = 0
+    for f in conn.execute(f"SELECT id, emb FROM faces WHERE person_id IN ({hm})", hidden).fetchall():
+        checked += 1
+        e = _emb(f["emb"])
+        best_hidden = float((hcents @ e).max())
+        sims = cents @ e
+        k = int(np.argmax(sims))
+        if sims[k] >= SAME_PERSON and sims[k] > best_hidden + margin:
+            _move(conn, [f["id"]], ids[k])
+            moved += 1
+    conn.commit()
+    return {"checked": checked, "moved": moved}
+
+
+def _resample_from(cfg: Config, conn, pid: int, face_id: int) -> None:
+    crop = face_crop(cfg, conn, face_id)
+    if crop:
+        dest = cfg.library_dir / "people" / f"{pid}.jpg"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(crop, dest)
+        conn.execute("UPDATE people SET sample=? WHERE id=?", (dest.relative_to(cfg.library_dir).as_posix(), pid))
+
+
+def face_crop(cfg: Config, conn, face_id: int) -> Path | None:
+    """A small picture of one detected face (cached), so you can see who was recognised."""
+    out = cfg.library_dir / "cache" / "faces" / f"{face_id}.jpg"
+    if out.exists():
+        return out
+    f = conn.execute("SELECT media_id, t, x, y, w, h FROM faces WHERE id=?", (face_id,)).fetchone()
+    if f is None:
+        return None
+    fr = conn.execute("SELECT path FROM frames WHERE media_id=? ORDER BY abs(t - ?) LIMIT 1",
+                      (f["media_id"], f["t"])).fetchone()
+    frame = None
+    with tempfile.TemporaryDirectory(prefix="crag-face-") as tmp:
+        frame_t = conn.execute("SELECT t FROM frames WHERE media_id=? ORDER BY abs(t - ?) LIMIT 1",
+                               (f["media_id"], f["t"])).fetchone()
+        if fr and frame_t and abs(frame_t["t"] - f["t"]) < 0.6:
+            frame = cfg.library_dir / fr["path"]
+        else:  # found by the 1-frame-a-second recheck: take that frame from the video itself
+            src = source_path(cfg, conn, f["media_id"])
+            if src is not None:
+                frame = Path(tmp) / "f.jpg"
+                subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{f['t']:.2f}", "-i", str(src),
+                                "-frames:v", "1", "-vf", "scale='if(gt(iw,ih),640,-2)':'if(gt(iw,ih),-2,640)'",
+                                str(frame)], capture_output=True, timeout=60)
+            elif fr:
+                frame = cfg.library_dir / fr["path"]
+        if frame is None or not frame.exists():
+            return None
+        try:
+            from PIL import Image
+
+            x, y, w, h = f["x"], f["y"], f["w"], f["h"]
+            pad = int(0.35 * max(w, h))
+            with Image.open(frame) as im:
+                crop = im.crop((max(0, x - pad), max(0, y - pad), x + w + pad, y + h + pad)).convert("RGB")
+                crop.thumbnail((200, 200))
+                out.parent.mkdir(parents=True, exist_ok=True)
+                crop.save(out, "JPEG", quality=85)
+        except Exception:  # noqa: BLE001
+            return None
+    return out

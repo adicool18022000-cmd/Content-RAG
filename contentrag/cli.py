@@ -168,6 +168,13 @@ def cmd_people(args):
 
     cfg, conn = _open(args)
     names = " ".join(args.name) if isinstance(args.name, list) else (args.name or "")
+    if args.action == "recheck":
+        from .faces import recheck_hidden
+
+        r = recheck_hidden(conn)
+        print(f"checked {r['checked']} faces tagged as hidden people; {r['moved']} looked more like someone "
+              "else and were moved to them")
+        return
     if args.action == "name":
         name_person(conn, int(args.ref.lstrip("#")), names)
         print(f"group {args.ref} is now '{names or '(unnamed)'}'")
@@ -505,11 +512,12 @@ def main(argv=None):
     sp.set_defaults(fn=cmd_faces)
 
     sp = sub.add_parser("people", help="list face groups, name them, hide someone everywhere")
-    sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "split", "hide", "unhide"])
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "name", "split", "hide", "unhide", "recheck"])
     sp.add_argument("ref", nargs="?", help="group id (#7) or name")
     sp.add_argument("name", nargs="*", help="for 'name': the person's name (groups with the same name = one person; "
                                             "empty = unnamed). 'hide'/'unhide' take several names. "
-                                            "'split <id>' separates a group's faces again")
+                                            "'split <id>' separates a group's faces again. 'recheck' moves faces wrongly "
+                                            "tagged as a hidden person to who they look more like")
     sp.add_argument("--min-faces", type=int, default=3)
     sp.set_defaults(fn=cmd_people)
 

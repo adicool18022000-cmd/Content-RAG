@@ -277,7 +277,7 @@ def process(cfg: Config, sid: str, mode: str = "auto") -> dict:
             text, mark = " ".join(said.get(eid, [])).strip(), s["marks"].get(eid)
             if not text and mark != "skip":
                 continue  # shown but nothing said: stays untold
-            ev = event_detail(cfg, conn, eid)
+            ev = event_detail(cfg, conn, eid, show_hidden_people=True)  # numbered as on screen
             if ev is None:
                 continue
             number = {it["id"]: k + 1 for k, it in enumerate(ev["items"])}
@@ -285,6 +285,7 @@ def process(cfg: Config, sid: str, mode: str = "auto") -> dict:
                       for mid, t in by_photo.get(eid, {}).items() if mid in number]
             items.append({"event_id": eid, "date": ev["date"], "time": ev["time"], "place": ev["place"],
                           "footage": [{"n": k + 1, "kind": it["kind"], "time": it["time"], "what": it["title"]}
+                                      | ({"has_hidden_person": True} if it["hidden_people"] else {})
                                       for k, it in enumerate(ev["items"][:40])],
                           "about_photo": [{"n": x["n"], "said": x["said"]} for x in photos],
                           "photos": photos,

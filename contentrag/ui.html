@@ -324,7 +324,7 @@ summary::-webkit-details-marker { display: none; }
 
 /* ---------------------------------------------------------------- lightbox (zoom a photo) */
 .lb { position: fixed; inset: 0; z-index: 70; background: #000; color: #fff; display: grid;
-      grid-template-rows: auto minmax(0, 1fr); }
+      grid-template-rows: auto minmax(0, 1fr) auto; }
 .lb-top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; flex-wrap: wrap; }
 .lb-top .grow { flex: 1; min-width: 0; font-size: 14px; color: rgba(255,255,255,.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lb-top .btn { background: rgba(255,255,255,.14); color: #fff; }
@@ -343,6 +343,27 @@ summary::-webkit-details-marker { display: none; }
 .collage.many { overflow-y: auto; align-content: start; }
 .collage.many img, .collage.many video { object-fit: cover; }
 .stage img { cursor: zoom-in; }
+
+/* ---------------------------------------------------------------- fix a wrong "hidden person" tag */
+.facefix { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; flex-wrap: wrap;
+           background: rgba(255, 204, 0, .14); border: 1px solid rgba(255, 204, 0, .45); }
+.facefix + .facefix { margin-top: 8px; }
+.facefix .faces { display: flex; gap: 6px; }
+.facefix .faces img { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; background: #222; }
+.ff-body { flex: 1; min-width: 220px; display: grid; gap: 8px; font-size: 14px; }
+.ff-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ff-rename { display: inline-flex; gap: 6px; }
+.ff-rename .field { height: 30px; width: 170px; font-size: 13px; }
+.facefix.dark { color: #fff; }
+.facefix.dark .btn { background: rgba(255,255,255,.14); color: #fff; }
+.facefix.dark .field { background: rgba(255,255,255,.12); color: #fff; }
+.lb-fix { padding: 10px 16px 14px; }
+.lb-fix:empty { display: none; }
+.collage .tile.hp { outline: 3px solid #ffcc00; outline-offset: -3px; }
+.collage .hpl { position: absolute; left: 8px; bottom: 8px; background: #ffcc00; color: #000; font-size: 12px;
+                font-weight: 600; border-radius: 6px; padding: 1px 6px; max-width: calc(100% - 16px);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.story-hp { color: #ffd60a; }
 
 /* ---------------------------------------------------------------- dialog, toast */
 dialog { border: 0; padding: 0; border-radius: 20px; width: min(920px, calc(100vw - 32px)); background: var(--surface);
@@ -580,7 +601,7 @@ document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
 /* ------------------------------------------------------------- memories */
-const MEM = {events: [], idx: -1, ev: null, item: 0, feelings: [], dirty: false, hidden: false, rec: null};
+const MEM = {events: [], idx: -1, ev: null, item: 0, feelings: [], dirty: false, hidden: true, rec: null};
 const mstore = {get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
                 set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }};
 const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, {weekday: "long", day: "numeric", month: "long", year: "numeric"});
@@ -652,8 +673,9 @@ function renderEvent() {
       <div class="caption" id="mCaption"></div>` : `<div class="notice">All items of this event include people you've hidden.</div>`}
     ${ev.held_back ? `<div class="notice hp" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="flex:1;min-width:220px"><b>${ev.held_back} photo${ev.held_back === 1 ? "" : "s"}/video${ev.held_back === 1 ? "" : "s"} with people you've hidden</b>
-        <div style="font-size:13px">${ev.hidden_shown ? "Shown below with a yellow frame. They never go into your videos; tell me in chat if one can be used (their face gets blurred)." : "Left out of Story mode and your videos. Look through them here if you want to tell this part too."}</div></div>
-      <button class="btn small" type="button" id="mHidden">${ev.hidden_shown ? "Hide them" : "Review them"}</button></div>` : ""}
+        <div style="font-size:13px">${ev.hidden_shown ? "Shown with a yellow frame. Under each one you can see the face that was recognised: if it's someone else, press <b>Not …</b> or type who it is, and the picture is back in your story." : "Left out of your videos. Look through them here if you want to tell this part too."}</div></div>
+      <button class="btn small" type="button" id="mHidden">${ev.hidden_shown ? "Hide them" : "Review them"}</button>
+      <button class="btn small" type="button" id="mRecheck" title="Compare every face tagged as a hidden person with your other face groups">Re-check all tags</button></div>` : ""}
     ${m.merged > 1 ? `<div class="notice">You told this day in ${m.merged} parts before (events used to be split finer). They're shown together below; saving combines them into one memory.</div>` : ""}
     <div class="card ask stack" style="gap:18px">
       <div><label for="mStory">What was happening? <span class="hint">Where were you, who was there, why, what happened before and after.</span></label>
@@ -693,6 +715,7 @@ function renderEvent() {
   $("mSkip").onclick = () => { mstore.set("mem.draft." + ev.id, null); MEM.dirty = false; openEvent(MEM.idx + 1); };
   $("mSave").onclick = () => saveMemory();
   $("mUnimportant").onclick = () => saveMemory({content: false, unimportant: true});
+  if ($("mRecheck")) $("mRecheck").onclick = recheckTags;
   if ($("mHidden")) $("mHidden").onclick = (x) => { x.preventDefault(); MEM.hidden = !ev.hidden_shown;
     if (!MEM.hidden && $("memShow").value === "hidden") $("memShow").value = "all"; openEvent(MEM.idx); };
   if ($("mStrip")) $("mStrip").onclick = (x) => { const b = x.target.closest("button"); if (b) showItem(+b.dataset.k); };
@@ -735,7 +758,7 @@ function showItem(k) {
   $("mCaption").innerHTML = `<div><b>${esc(it.time)}</b> · ${esc(it.title || (it.kind === "video" ? "Video" : "Photo"))}</div>
     ${it.summary ? `<div class="muted">${esc(it.summary)}</div>` : ""}
     ${it.said.length ? `<div class="said">Said: ${it.said.map(x => "“" + esc(x) + "”").join(" ")}</div>` : ""}
-    ${it.hidden_people && it.hidden_people.length ? `<div><span class="badge" style="background:#ffcc00;color:#000">With ${esc(it.hidden_people.join(", "))}: never used in videos</span></div>` : ""}`;
+    ${faceFixHtml(it, MEM.ev.items, false)}`;
 }
 function formData() {
   return {id: MEM.ev.id, story: $("mStory").value, meaning: $("mMeaning").value, angle: $("mAngle").value,
@@ -967,7 +990,7 @@ function renderLive() {
 }
 async function eventData(i) {
   const id = MEM.events[i].id;
-  if (!STORY.cache[id]) STORY.cache[id] = fetch(`/api/memories/event?id=${encodeURIComponent(id)}`).then(r => r.json()).catch(() => null);
+  if (!STORY.cache[id]) STORY.cache[id] = fetch(`/api/memories/event?id=${encodeURIComponent(id)}&hidden=1`).then(r => r.json()).catch(() => null);
   return STORY.cache[id];
 }
 async function showStoryEvent(pos) {
@@ -983,6 +1006,10 @@ async function showStoryEvent(pos) {
   $("sCap").innerHTML = `<div class="when">${esc(fmtDate(e.date))}</div><div class="what">${esc(e.time)}${e.place ? " · " + esc(e.place) : ""} · ${esc(e.title)}</div>`;
   const ev = await eventData(i);
   if (STORY.order[STORY.pos] !== i || !ev) return;
+  renderStorySlide(ev);
+  if (STORY.order[STORY.pos + 1] !== undefined) eventData(STORY.order[STORY.pos + 1]);  // preload the next one
+}
+function renderStorySlide(ev) {
   const items = ev.items, n = Math.max(1, items.length), box = $("sCollage");
   box.style.gridTemplateColumns = box.style.gridTemplateRows = box.style.gridAutoRows = "";
   if (n <= 6) box.className = `collage n${n}`;
@@ -996,17 +1023,21 @@ async function showStoryEvent(pos) {
   box.innerHTML = items.map((it, k) => {
     const num = `<span class="num">${k + 1}</span>`;
     if (it.kind === "video" && !played && n <= 6) { played = true;
-      return `<div class="tile" data-k="${k}"><video muted autoplay loop playsinline preload="metadata" poster="${thumbUrl(it.thumb)}" src="/api/media/${it.id}"></video>${num}</div>`; }
-    return `<div class="tile" data-k="${k}"><img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">${num}${it.kind === "video" ? '<span class="more">▶</span>' : ""}</div>`;
+      return `<div class="tile${hp(it)}" data-k="${k}"><video muted autoplay loop playsinline preload="metadata" poster="${thumbUrl(it.thumb)}" src="/api/media/${it.id}"></video>${num}${hpl(it)}</div>`; }
+    return `<div class="tile${hp(it)}" data-k="${k}"><img loading="lazy" src="${thumbUrl(it.thumb)}" alt="">${num}${it.kind === "video" ? '<span class="more">▶</span>' : ""}${hpl(it)}</div>`;
   }).join("") || `<div class="tile" style="display:grid;place-items:center;color:#888">${ev.held_back ? "Only photos with people you've hidden" : "No preview"}</div>`;
   box.querySelectorAll("video").forEach(v => v.onerror = () => { v.outerHTML = `<img src="${v.poster}" alt="">`; });
   box.onclick = (x) => { const t = x.target.closest(".tile[data-k]"); if (t) openLightbox(items, +t.dataset.k, true); };
   const said = ev.items.flatMap(x => x.said).slice(0, 2);
+  const total = ev.items.length + (ev.hidden_shown ? 0 : ev.held_back);
+  const hidNames = [...new Set(ev.items.flatMap(x => x.hidden_people || []))];
   $("sCap").innerHTML = `<div class="when">${esc(fmtDate(ev.date))}</div>
-    <div class="what">${esc(ev.time)}${ev.place ? " · " + esc(ev.place) : ""} · ${ev.items.length + ev.held_back} photo${ev.items.length + ev.held_back === 1 ? "" : "s"}/video${ev.items.length + ev.held_back === 1 ? "" : "s"}${ev.people_seen.length ? " · with " + esc(ev.people_seen.slice(0, 4).join(", ")) : ""}</div>
+    <div class="what">${esc(ev.time)}${ev.place ? " · " + esc(ev.place) : ""} · ${total} photo${total === 1 ? "" : "s"}/video${total === 1 ? "" : "s"}${ev.people_seen.length ? " · with " + esc(ev.people_seen.slice(0, 4).join(", ")) : ""}</div>
+    ${ev.held_back ? `<div class="what story-hp">Yellow frame = recognised as someone you hid (${esc(hidNames.join(", "))}). Wrong person? Click the picture to fix it.</div>` : ""}
     <div class="what" style="color:rgba(255,255,255,.5)">${esc(ev.items.slice(0, 3).map(x => x.title).filter(Boolean).join(" · "))}${said.length ? " · “" + esc(said[0]) + "”" : ""}</div>`;
-  if (STORY.order[STORY.pos + 1] !== undefined) eventData(STORY.order[STORY.pos + 1]);  // preload the next one
 }
+const hp = (it) => it.hidden_people && it.hidden_people.length ? " hp" : "";
+const hpl = (it) => hp(it) ? `<span class="hpl">Hidden: ${esc(it.hidden_people.join(", "))}</span>` : "";
 function storyGo(d) {
   if (STORY.pos + d >= STORY.order.length) { toast("That was the last event. Press Finish when you're done."); return; }
   showStoryEvent(STORY.pos + d);
@@ -1148,7 +1179,7 @@ function openLightbox(items, k, story) {
         <button class="btn small" type="button" id="lbIn" title="Zoom in (+)">+</button>
         <button class="btn small" type="button" id="lbFit" title="Fit (0)">Fit</button>
         <button class="btn small" type="button" id="lbClose" title="Close (Esc)">Close</button></div>
-      <div class="lb-view" id="lbView"></div>`;
+      <div class="lb-view" id="lbView"></div><div class="lb-fix" id="lbFix"></div>`;
     document.body.appendChild(el);
     $("lbClose").onclick = closeLightbox;
     $("lbIn").onclick = () => lbZoom(1.5); $("lbOut").onclick = () => lbZoom(1 / 1.5); $("lbFit").onclick = lbFit;
@@ -1176,6 +1207,7 @@ function lbShow(k) {
   const n = LB.items.length; LB.k = (k + n) % n;
   const it = LB.items[LB.k], v = $("lbView");
   $("lbCap").textContent = `${it.kind === "video" ? "Video" : "Photo"} ${LB.k + 1} of ${n} · ${it.time}${it.title ? " · " + it.title : ""}`;
+  $("lbFix").innerHTML = faceFixHtml(it, LB.items, true);
   const arrows = n > 1 ? `<button class="lb-arrow l" type="button" onclick="lbShow(LB.k-1)" aria-label="Previous">‹</button><button class="lb-arrow r" type="button" onclick="lbShow(LB.k+1)" aria-label="Next">›</button>` : "";
   const note = LB.story ? `<span class="lb-note">The slideshow waits while this is open: keep talking about it</span>` : "";
   if (it.kind === "video") {
@@ -1223,6 +1255,70 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "x" || e.key === "X") { e.stopImmediatePropagation(); }  // X only marks from the slideshow
 }, true);
 window.addEventListener("resize", () => { if (LB.open) lbFit(); });
+
+/* ------------------------------------------------------------- fix a wrong "hidden person" tag */
+let PEOPLE_NAMES = null;
+async function peopleNames() {
+  if (!PEOPLE_NAMES) {
+    try { const j = await (await fetch("/api/people?min=1")).json(); PEOPLE_NAMES = (j.persons || []).filter(p => !p.hidden).map(p => p.name); }
+    catch (e) { PEOPLE_NAMES = []; }
+    let dl = $("peopleList"); if (!dl) { dl = document.createElement("datalist"); dl.id = "peopleList"; document.body.appendChild(dl); }
+    dl.innerHTML = PEOPLE_NAMES.map(n => `<option value="${esc(n)}">`).join("");
+  }
+  return PEOPLE_NAMES;
+}
+function faceFixHtml(it, evItems, dark) {
+  if (!it || !it.hidden_faces || !it.hidden_faces.length) return "";
+  peopleNames();
+  const byName = {}; it.hidden_faces.forEach(f => (byName[f.name] = byName[f.name] || []).push(f));
+  return Object.entries(byName).map(([name, fs]) => {
+    const day = (evItems || []).filter(x => (x.hidden_people || []).includes(name)).length;
+    return `<div class="facefix${dark ? " dark" : ""}" data-person="${esc(name)}" data-mid="${it.id}">
+      <div class="faces">${fs.slice(0, 3).map(f => `<img src="/api/face/${f.id}" alt="Recognised face" loading="lazy">`).join("")}</div>
+      <div class="ff-body"><div>Recognised as <b>${esc(name)}</b>, who you've hidden. Is that right?</div>
+        <div class="ff-actions">
+          <button class="btn small" type="button" data-act="not">Not ${esc(name)}</button>
+          ${day > 1 ? `<button class="btn small" type="button" data-act="notday">Not ${esc(name)} in any of this day's ${day}</button>` : ""}
+          <span class="ff-rename"><input class="field" list="peopleList" placeholder="This is…" data-new aria-label="Who is it?">
+            <button class="btn small" type="button" data-act="rename">Save</button></span>
+        </div></div></div>`;
+  }).join("");
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".facefix [data-act]"); if (!b) return;
+  const box = b.closest(".facefix"), person = box.dataset.person, act = b.dataset.act;
+  const items = LB.open ? LB.items : (MEM.ev ? MEM.ev.items : []);
+  let mids = [box.dataset.mid], new_name = null;
+  if (act === "notday") mids = items.filter(x => (x.hidden_people || []).includes(person)).map(x => x.id);
+  if (act === "rename") { new_name = box.querySelector("[data-new]").value.trim(); if (!new_name) { toast("Type who it is first"); return; } }
+  b.disabled = true;
+  const j = await (await post("/api/faces/retag", {media_ids: mids, person, new_name})).json().catch(() => ({error: "failed"}));
+  if (j.error) { toast(j.error); b.disabled = false; return; }
+  PEOPLE_NAMES = null;
+  toast(new_name ? `Tagged as ${new_name}` : `Not ${person}: ${mids.length} picture${mids.length === 1 ? "" : "s"} back in your story`);
+  await refreshAfterRetag();
+});
+async function refreshAfterRetag() {
+  if (STORY.live) {
+    const i = STORY.order[STORY.pos]; delete STORY.cache[MEM.events[i].id];
+    const ev = await eventData(i); if (!ev) return;
+    MEM.events[i].hidden = ev.held_back; renderStorySlide(ev);
+    if (LB.open) { LB.items = ev.items; lbShow(Math.min(LB.k, ev.items.length - 1)); }
+    return;
+  }
+  if (MEM.idx < 0) return;
+  const k = MEM.item, lbk = LB.k, lb = LB.open;
+  if ($("mStory") && ($("mStory").value.trim() || $("mMeaning").value.trim())) { MEM.dirty = true; saveDraft(); }
+  await openEvent(MEM.idx);
+  if (MEM.ev) { MEM.events[MEM.idx].hidden = MEM.ev.held_back; renderMemList(); showItem(Math.min(k, MEM.ev.items.length - 1)); }
+  if (lb && MEM.ev) { LB.items = MEM.ev.items; lbShow(Math.min(lbk, LB.items.length - 1)); }
+}
+async function recheckTags() {
+  const b = $("mRecheck"); if (b) { b.disabled = true; b.textContent = "Checking…"; }
+  const j = await (await post("/api/faces/recheck", {})).json().catch(() => ({}));
+  toast(j.checked ? `Checked ${j.checked} faces: ${j.moved} looked more like someone else and were moved to them` : (j.error || "Nothing to check"));
+  const keep = MEM.idx; MEM.events = []; await loadMemories(); if (keep >= 0) openEvent(keep);
+}
 
 /* ------------------------------------------------------------- status */
 const PHASE = {scan: "Finding new files", prep: "Preparing thumbnails", faces: "Finding faces", transcribe: "Transcribing speech",

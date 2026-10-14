@@ -726,6 +726,32 @@ def test_faces_group_name_merge_hide(env, monkeypatch):
     assert json.loads((Path(out["remotion"]) / "src" / "plan.json").read_text())["blur"]
     assert src in Path(out["premiere"]).read_text() or "goa" in Path(out["premiere"]).read_text()
     assert "Blurred faces" in (Path(out["folder"]) / "EDIT.md").read_text()
+    # a wrong "hidden person" tag can be fixed: see the face, then "not her" or "this is ..."
+    from contentrag.faces import face_crop, hidden_faces, recheck_hidden, retag_faces
+
+    hf = hidden_faces(conn, goa)
+    assert hf and hf[0]["name"] == "Ex"
+    crop = face_crop(cfg, conn, hf[0]["id"])
+    assert crop and crop.exists() and crop.stat().st_size > 0
+    # a face tagged as her that looks much more like someone else (the other face group) is moved by recheck
+    pb = next(pid for pid in people if pid != pa)
+    conn.execute("UPDATE people SET faces=10 WHERE id=?", (pb,))
+    wrong = conn.execute("INSERT INTO faces(media_id, t, x, y, w, h, score, emb, person_id) VALUES (?,11,10,10,80,80,0.9,?,?)",
+                         (goa, b.tobytes(), pa)).lastrowid
+    conn.commit()
+    r = recheck_hidden(conn)
+    assert r["moved"] == 1 and conn.execute("SELECT person_id FROM faces WHERE id=?", (wrong,)).fetchone()[0] == pb
+    # "this is Aditya": her tags in that clip go to a new, not hidden group; the clip is free again
+    assert hidden_ranges(conn, goa)
+    assert retag_faces(cfg, conn, [goa], "Ex", "Aditya")["moved"] >= 4
+    assert not hidden_ranges(conn, goa) and not hidden_faces(conn, goa)
+    me = conn.execute("SELECT hidden FROM people WHERE name='Aditya'").fetchone()
+    assert me is not None and not me[0]
+    retag_faces(cfg, conn, [goa], "Aditya", "Ex")  # back to her (stays hidden: same name as a hidden person)
+    assert hidden_ranges(conn, goa)
+    assert retag_faces(cfg, conn, [goa], "Ex")["moved"] >= 4  # "not her": to whoever they look like, or no one
+    assert not hidden_ranges(conn, goa)
+
     # photos with a hidden person never appear
     photo = conn.execute("SELECT id FROM media WHERE kind='photo' LIMIT 1").fetchone()["id"]
     assert any(r["media_id"] == photo for r in search(cfg, conn, "", Filters(kind="photo"), use_vectors=False))

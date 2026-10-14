@@ -348,6 +348,18 @@ def make_handler(cfg: Config, job: Job):
                     if library not in p.parents or not p.is_file():
                         return self._json({"error": "not found"}, 404)
                     return self._file(p)
+                if url.path.startswith("/api/face/"):
+                    from .faces import face_crop
+
+                    fid = url.path.rsplit("/", 1)[-1]
+                    if not fid.isdigit():
+                        return self._json({"error": "bad id"}, 400)
+                    conn = connect(cfg.db_path)
+                    try:
+                        path = face_crop(cfg, conn, int(fid))
+                    finally:
+                        conn.close()
+                    return self._file(path) if path else self._json({"error": "not found"}, 404)
                 if url.path.startswith("/api/photo/"):
                     from .memories import full_photo
 
@@ -465,6 +477,22 @@ def make_handler(cfg: Config, job: Job):
                 try:
                     return self._json(save_memory(cfg, conn, str(body.get("id") or ""), body))
                 except ValueError as e:
+                    return self._json({"error": str(e)}, 400)
+                finally:
+                    conn.close()
+            if url.path in ("/api/faces/retag", "/api/faces/recheck"):
+                from .faces import recheck_hidden, retag_faces
+
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                conn = connect(cfg.db_path)
+                try:
+                    if url.path == "/api/faces/recheck":
+                        return self._json(recheck_hidden(conn))
+                    mids = [m for m in body.get("media_ids") or [] if re.fullmatch(r"[0-9a-f]{20}", str(m))]
+                    if not mids or not body.get("person"):
+                        return self._json({"error": "nothing to change"}, 400)
+                    return self._json(retag_faces(cfg, conn, mids, str(body["person"]), body.get("new_name") or None))
+                except SystemExit as e:
                     return self._json({"error": str(e)}, 400)
                 finally:
                     conn.close()

@@ -19,6 +19,7 @@ from pathlib import Path
 from .config import Config
 from .db import jloads
 from .usage import collection_hidden, hidden_ranges, hidden_sets, photo_has_hidden_person
+from .faces import hidden_faces
 from .vault import _city, _q, _slug, _yaml_list, cluster_events, event_memory, read_memories
 
 MANAGED = ("What it meant", "What happened", "Content angle")
@@ -122,6 +123,7 @@ def event_detail(cfg: Config, conn, event_id: str, show_hidden_people: bool = Fa
             "said": [x["speech_en"] for x in moments if x["speech_en"]][:4],
             "seen": [x["description"] for x in moments if x["description"]][:4],
             "hidden_people": _names_in(conn, m, hidden) if is_hidden else [],
+            "hidden_faces": hidden_faces(conn, m["id"]) if is_hidden else [],  # who was recognised, to check
         })
     ids = [m["id"] for m in ev]
     marks = ",".join("?" * len(ids))
