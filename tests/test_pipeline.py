@@ -1455,8 +1455,8 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
     cfg, _ = env
     seen = {}
 
-    def fake_transcribe(audio, path_or_hf_repo=None, initial_prompt=None, **kw):
-        seen.update(kw, audio=audio, prompt=initial_prompt, model=path_or_hf_repo)
+    def fake_transcribe(audio, path_or_hf_repo=None, initial_prompt=None, temperature=None, **kw):
+        seen.update(kw, audio=audio, prompt=initial_prompt, model=path_or_hf_repo, temperature=temperature)
         return {"segments": [{"text": " Goa wali trip ", "no_speech_prob": 0.01, "start": 0, "end": 1}]}
 
     monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=fake_transcribe))
@@ -1469,7 +1469,9 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
     # the language is always set (guessing it turned Hinglish into Korean), your words are the prompt
     assert seen["task"] == "translate" and seen["language"] == "hi" and seen["audio"].dtype.name == "float32"
     assert "Manya" in seen["prompt"] and "JEE Advanced" in seen["prompt"]
-    assert seen["model"] == cfg.memory_whisper_model
+    assert seen["model"] == cfg.whisper_model  # fast by default
+    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", quality="best")
+    assert seen["model"] == cfg.memory_whisper_model and seen["temperature"] == (0.0, 0.4)
     memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "auto")  # old setting: Hindi + English
     assert seen["language"] == "hi" and seen["task"] == "transcribe"
     memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", "en")
@@ -1502,9 +1504,9 @@ def test_voice_transcription(env, monkeypatch, tmp_path):
 
     voice._model_ok.clear()
     monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=flaky))
-    assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm") == "phir hum ghar aaye"
+    assert memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", quality="best") == "phir hum ghar aaye"
     assert calls == [cfg.memory_whisper_model, cfg.whisper_model]
-    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm")
+    memories.transcribe_audio(cfg, rec.read_bytes(), ".webm", quality="best")
     assert calls[-1] == cfg.whisper_model and len(calls) == 3  # not tried again
     voice._model_ok.clear()
 
@@ -1588,12 +1590,11 @@ def test_story_mode(env, monkeypatch, tmp_path):
     assert story.load(cfg, s["id"])["bytes"] == len(data)
     calls = []
 
-    def whisper(audio, initial_prompt=None, **kw):  # each event's part of the recording on its own
+    def whisper(audio, initial_prompt=None, **kw):  # the recording in pieces, silence skipped
         calls.append((len(audio) / 16000, initial_prompt, kw["language"]))
-        if len(audio) > 3 * 16000:
-            return {"segments": [{"start": 0.5, "end": 2.5, "text": " Goa trip with Rahul, first trip I planned "
-                                                                    "myself, bahut maza aaya."}]}
-        return {"segments": [{"start": 0.1, "end": 0.9, "text": " Thank you."}]}
+        return {"segments": [{"start": 0.5, "end": 2.5, "text": " Goa trip with Rahul, first trip I planned "
+                                                                "myself, bahut maza aaya."},
+                             {"start": 4.3, "end": 5.2, "text": " Thank you."}]}
 
     monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=whisper))
     monkeypatch.setattr(story, "ai_name", lambda cfg: None)  # no AI: their words are kept as said
@@ -1601,8 +1602,8 @@ def test_story_mode(env, monkeypatch, tmp_path):
     story.update(cfg, s["id"], [{"event_id": a, "start": 0, "end": 4}, {"event_id": b, "start": 4, "end": 6}], {b: "skip"})
     out = story.process(cfg, s["id"])
     assert out["state"] == "review" and [d["event_id"] for d in out["drafts"]] == [a, b]
-    assert len(calls) == 2 and all(c[2] == "hi" for c in calls) and 3.2 < calls[0][0] < 4.8
-    assert all("Rahul" in c[1] for c in calls)  # every part gets the vocabulary prompt
+    assert len(calls) == 1 and calls[0][2] == "hi" and 5.5 < calls[0][0] <= 6.1  # 6 s of talk: one piece
+    assert "Rahul" in calls[0][1]  # the vocabulary prompt
     assert out["voice"] == story.VOICE_VERSION and all(x["event_id"] in (a, b) for x in out["segments"])
     da, db_ = out["drafts"]
     assert "Rahul" in da["story"] and da["content"] and da["told"] and da["told_on"] == a and da["spans"] == [[0, 4]]
@@ -1610,7 +1611,7 @@ def test_story_mode(env, monkeypatch, tmp_path):
     assert db_["content"] is False  # pressed X; Whisper's phantom "Thank you." was dropped
     assert [x["id"] for x in story.sessions(cfg)] == [s["id"]] and not story.sessions(cfg)[0]["outdated"]
     story.process(cfg, s["id"])
-    assert len(calls) == 2  # already transcribed: not done again
+    assert len(calls) == 1  # already transcribed: not done again
     out["drafts"][0]["photos"] = [{"media_id": a, "n": 1, "said": "the bike at night"}]
     out["drafts"][0]["questions"] = ["Who is Rahul?"]
     res = story.approve(cfg, conn, s["id"], out["drafts"])

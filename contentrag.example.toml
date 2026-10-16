@@ -40,8 +40,9 @@ enabled = false
 # large-v3 with similar Hindi quality.
 model = "mlx-community/whisper-large-v3-turbo"
 language = "hi"
-# Your spoken memories (Story mode, Speak buttons): the full large-v3 model, slower but much
-# better at Hindi/Hinglish and names. Downloaded once (~3 GB). Falls back to `model` if missing.
+# Your spoken memories (Story mode, Speak buttons) use `model` (fast). Pick "Most accurate" in the
+# dashboard to use this one instead: large-v3, better with names, several times slower.
+# Downloaded once (~3 GB). Falls back to `model` if it can't be loaded.
 memory_model = "mlx-community/whisper-large-v3-mlx"
 
 [describe]

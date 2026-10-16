@@ -889,7 +889,7 @@ async function toggleMic(btn) {
     if (blob.size < 1500) { toast("The recording came through empty. Pick the right microphone next to Speak and talk for a few seconds."); return done(); }
     if (ctx && peak < 3) { toast("The microphone didn't pick up any sound. Pick another one next to Speak, or check System Settings › Sound › Input."); return done(); }
     try {
-      const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "mixed")}&event=${encodeURIComponent(MEM.ev ? MEM.ev.id : "")}`,
+      const r = await fetch(`/api/transcribe?mode=${encodeURIComponent($("mLang") ? $("mLang").value : "mixed")}&event=${encodeURIComponent(MEM.ev ? MEM.ev.id : "")}&quality=${qualOf()}`,
         {method: "POST", headers: {"Content-Type": blob.type, "X-Crag": "1"}, body: blob});
       const j = await r.json();
       if (j.text) { const ta = $(btn.dataset.for); ta.value = (ta.value.trim() ? ta.value.trim() + "\n\n" : "") + j.text; MEM.dirty = true; saveDraft(); }
@@ -917,6 +917,8 @@ const STORY = {live: false, sid: null, rec: null, stream: null, seq: 0, queue: [
 const LANGS = [["mixed", "Hindi + English (recommended)"], ["en", "English only"], ["translate", "Hindi → English text (shorter, loses details)"]];
 const langOf = (k) => { const v = mstore.get(k); return LANGS.some(l => l[0] === v) ? v : "mixed"; };
 const langOpts = (prefix = "") => LANGS.map(([v, t]) => `<option value="${v}">${prefix}${t}</option>`).join("");
+// fast = the normal Whisper model; best = the big one (better with names, several times slower)
+const qualOf = () => mstore.get("voice.quality") === "best" ? "best" : "fast";
 const audioNow = () => (STORY.acc + (STORY.paused || !STORY.runAt ? 0 : performance.now() - STORY.runAt)) / 1000;
 
 function showMemMode() {
@@ -970,6 +972,9 @@ async function renderStorySetup() {
         <label class="opt"><span>Move on after you're quiet for</span><select class="field" id="sWait">
           ${[3, 4, 6, 8, 12].map(n => `<option value="${n}"${n === (+mstore.get("story.wait") || 4) ? " selected" : ""}>${n} seconds</option>`).join("")}</select></label>
         <label class="opt"><span>You'll talk in</span><select class="field" id="sLang">${langOpts()}</select></label>
+        <label class="opt"><span>Voice to text</span><select class="field" id="sQual">
+          <option value="fast">Fast (recommended)</option>
+          <option value="best">Most accurate: better with names, several times slower</option></select></label>
         <label class="opt"><span>Microphone</span><select class="field" id="sMic"><option value="">Default</option></select></label>
         <button class="btn primary large" type="button" id="sGo">● Start talking</button>
       </div>
@@ -989,15 +994,16 @@ async function renderStorySetup() {
       ${sj.repair ? `<button class="btn plain small" type="button" id="repairUndo" title="Puts back the ${sj.repair.changed} notes as they were before the repair of ${esc(sj.repair.run)}">Undo last repair</button>` : ""}
       <button class="btn small" type="button" id="repairGo">Check &amp; repair</button></div>`;
   $("sLang").value = langOf("story.lang");
+  $("sQual").value = qualOf(); $("sQual").onchange = () => mstore.set("voice.quality", $("sQual").value);
   fillMics($("sMic"));
   $("sMic").onchange = () => mstore.set("mem.mic", $("sMic").value);
   $("sStart").onchange = () => { $("sYearRow").hidden = $("sStart").value !== "year"; };
   $("sGo").onclick = startStory;
   $("storyView").querySelectorAll("[data-review]").forEach(b => b.onclick = () => openReview(b.dataset.review));
   $("storyView").querySelectorAll("[data-finish]").forEach(b => b.onclick = async () => {
-    await post("/api/story/finish", {id: b.dataset.finish, mode: langOf("story.lang")}); openReview(b.dataset.finish); });
+    await post("/api/story/finish", {id: b.dataset.finish, mode: langOf("story.lang"), quality: qualOf()}); openReview(b.dataset.finish); });
   $("storyView").querySelectorAll("[data-redo]").forEach(b => b.onclick = async () => {
-    await post("/api/story/finish", {id: b.dataset.redo, mode: $("sLang").value, redo: true}); openReview(b.dataset.redo); });
+    await post("/api/story/finish", {id: b.dataset.redo, mode: $("sLang").value, redo: true, quality: qualOf()}); openReview(b.dataset.redo); });
   $("repairGo").onclick = runRepair;
   if (sj.repair_running) followRepair();
   if ($("repairUndo")) $("repairUndo").onclick = async () => {
@@ -1205,7 +1211,7 @@ async function finishStory() {
   STORY.stream.getTracks().forEach(t => t.stop()); if (STORY.ctx) STORY.ctx.close().catch(() => {});
   window.removeEventListener("beforeunload", storyBeforeUnload);
   $("storyLive").remove(); document.body.style.overflow = "";
-  await post("/api/story/finish", {id: STORY.sid, timeline: tl, marks: STORY.marks, mode: STORY.mode});
+  await post("/api/story/finish", {id: STORY.sid, timeline: tl, marks: STORY.marks, mode: STORY.mode, quality: qualOf()});
   openReview(STORY.sid);
 }
 document.addEventListener("keydown", (e) => {
@@ -1227,7 +1233,7 @@ async function openReview(sid) {
     if (s.state === "error" || s.state === "recording") {
       $("storyView").innerHTML = `<div class="notice warn">${esc(s.message || "Something went wrong")}</div>
         <div class="row-actions"><button class="btn primary" id="rRetry">Try again</button><button class="btn plain" id="rBack">Back</button></div>`;
-      $("rRetry").onclick = async () => { await post("/api/story/finish", {id: sid, mode: langOf("story.lang")}); openReview(sid); };
+      $("rRetry").onclick = async () => { await post("/api/story/finish", {id: sid, mode: langOf("story.lang"), quality: qualOf()}); openReview(sid); };
       $("rBack").onclick = () => { STORY.review = null; renderStorySetup(); };
       return;
     }
@@ -1277,7 +1283,7 @@ function renderReview(s) {
     const sel = b.closest(".draft").querySelector('[data-f="event"]'); sel.value = b.dataset.move; b.remove(); });
   if ($("rRedo")) { $("rLang").value = langOf("story.lang");
     $("rRedo").onclick = async () => { mstore.set("story.lang", $("rLang").value);
-      await post("/api/story/finish", {id: s.id, mode: $("rLang").value, redo: true}); openReview(s.id); }; }
+      await post("/api/story/finish", {id: s.id, mode: $("rLang").value, redo: true, quality: qualOf()}); openReview(s.id); }; }
   const save = async () => {
     const out = [...$("storyView").querySelectorAll(".draft")].map(el => {
       const d = {...drafts[+el.dataset.k]}, f = (n) => el.querySelector(`[data-f="${n}"]`);

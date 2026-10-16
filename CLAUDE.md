@@ -10,10 +10,11 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   `vault.read_memories` and shown on generated event/year notes; `_generated/Interview queue.md`.
   Dashboard Memories tab (`memories.py`): same event ids as the vault, media + voice (local
   mlx-whisper via `/api/transcribe`) → `save_memory` (keeps sections it doesn't manage).
-  Story mode (`story.py`): chunked recording + timeline → each event's stretch of audio (`runs`, cut at quiet
-  points) → `voice.py` (language always set: mixed=hi / en / translate; large-v3 `memory_model`; prompt = people,
-  places, folders, `library_dir/vocabulary.txt`, the event; ≤28 s pieces; cleaner drops wrong scripts/languages,
-  loops, "foreign", phantom lines) → AI drafts = full retelling, not a summary (claude-code login, else Gemini, else
+  Story mode (`story.py`): chunked recording + timeline → `voice.py` on the whole recording in ≤28 s speech
+  pieces, each segment → event on screen (language always set: mixed=hi / en / translate; quality fast = turbo
+  `whisper_model`, best = large-v3 `memory_model`; temperatures (0, 0.4); prompt = people, places, folders,
+  `library_dir/vocabulary.txt`, events on screen; cleaner drops wrong scripts/languages, loops, "foreign", phantom
+  lines) → AI drafts = full retelling, not a summary (claude-code login, else Gemini, else
   words as said; size-based batches, summaries retried) → review (Belongs to / move) → `approve`; audio kept in
   `library_dir/story/audio/`. `crag memories repair` (`memory_repair.py`) fixes notes from the old pipeline (text
   only): AI placement by sentence ranges moves what was told on the wrong event, then every old Story-mode note

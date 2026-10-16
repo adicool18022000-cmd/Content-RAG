@@ -539,7 +539,8 @@ def event_terms(cfg: Config, conn, event_id: str | None) -> list[str]:
     return terms
 
 
-def whisper_segments(cfg: Config, wav: Path, mode: str = "mixed", conn=None, event_id: str | None = None) -> list[dict]:
+def whisper_segments(cfg: Config, wav: Path, mode: str = "mixed", conn=None, event_id: str | None = None,
+                     quality: str = "fast") -> list[dict]:
     """[{start, end, text}] for a 16 kHz wav: language set (never guessed), your names as vocabulary,
     invented lines / loops / wrong-script lines removed (see voice.py)."""
     from . import voice
@@ -547,11 +548,11 @@ def whisper_segments(cfg: Config, wav: Path, mode: str = "mixed", conn=None, eve
     vocab = voice.vocabulary(cfg, conn)
     extra = event_terms(cfg, conn, event_id) if conn is not None else []
     return voice.transcribe_samples(cfg, voice.load_wav(wav), mode, voice.prompt_for(vocab, extra),
-                                    vocab_terms_=voice.vocab_terms(vocab))
+                                    vocab_terms_=voice.vocab_terms(vocab), quality=quality)
 
 
 def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str = "mixed",
-                     event_id: str | None = None) -> str:
+                     event_id: str | None = None, quality: str = "fast") -> str:
     """Speech to text on this Mac. mode: mixed (Hindi + English) | en | translate (Hindi -> English text).
     The recording stays in a temporary folder on this computer and is deleted right after."""
     from . import voice
@@ -578,7 +579,7 @@ def transcribe_audio(cfg: Config, audio: bytes, suffix: str = ".webm", mode: str
 
             conn = connect(cfg.db_path, threads=True)
         try:
-            segs = whisper_segments(cfg, wav, mode, conn, event_id)
+            segs = whisper_segments(cfg, wav, mode, conn, event_id, quality)
         finally:
             if conn is not None:
                 conn.close()

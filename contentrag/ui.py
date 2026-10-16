@@ -566,8 +566,9 @@ def make_handler(cfg: Config, job: Job):
                 suffix = {"audio/mp4": ".m4a", "audio/ogg": ".ogg", "audio/wav": ".wav"}.get(ctype, ".webm")
                 q = parse_qs(url.query)
                 mode, event = q.get("mode", ["mixed"])[-1], q.get("event", [""])[-1] or None
+                quality = "best" if q.get("quality", [""])[-1] == "best" else "fast"
                 try:
-                    return self._json({"text": transcribe_audio(cfg, audio, suffix, mode, event)})
+                    return self._json({"text": transcribe_audio(cfg, audio, suffix, mode, event, quality)})
                 except RuntimeError as e:
                     return self._json({"error": str(e)}, 501)
             if url.path == "/api/stop":
@@ -602,7 +603,8 @@ def make_handler(cfg: Config, job: Job):
                     s = story.load(cfg, sid)
                     return self._json(story.finish(cfg, sid, body.get("timeline") or s["timeline"],
                                                    body.get("marks") or s["marks"], str(body.get("mode") or "mixed"),
-                                                   redo=bool(body.get("redo"))))
+                                                   redo=bool(body.get("redo")),
+                                                   quality="best" if body.get("quality") == "best" else "fast"))
                 if url.path == "/api/story/approve":
                     conn = connect(cfg.db_path)
                     try:

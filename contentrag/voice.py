@@ -9,7 +9,10 @@ What went wrong with plain Whisper on Hindi/Hinglish, and what this does about i
 - Long takes drift into loops, "foreign" and invented lines ("Thank you."). The audio is cut into pieces of
   at most ~28 s at quiet moments, silent pieces are skipped, and every line is checked: lines in a wrong
   script or language, loops, "foreign" and invented lines are removed (marked [unclear] when words were lost).
-- The bigger model (large-v3) is used for memories; it is slower than turbo but much better at Hindi.
+- Speed: the normal (turbo) model is used unless you pick "Most accurate" (large-v3: better with names
+  and Hindi, several times slower; downloaded once, ~3 GB). Silence is skipped, a piece is decoded again
+  at most once, and Story mode transcribes the whole recording in ~28 s pieces (fewer passes than one
+  piece per event).
 
 Audio never leaves this computer.
 """
@@ -411,13 +414,19 @@ _lock = threading.Lock()
 _model_ok: dict[str, bool] = {}
 
 
-def model_for(cfg: Config) -> str:
-    return cfg.memory_whisper_model or cfg.whisper_model
+QUALITY = ("fast", "best")
+TEMPERATURES = (0.0, 0.4)  # a piece that comes out as a loop is decoded once more, not five times
 
 
-def _whisper(cfg: Config, audio, **kw) -> dict:
-    """mlx_whisper.transcribe with the bigger memory model (falls back to the normal one if it can't be
-    loaded, e.g. no internet for the first download). Options this mlx-whisper doesn't know are left out."""
+def model_for(cfg: Config, quality: str = "fast") -> str:
+    """fast: the normal (turbo) model. best: the big memory model (large-v3), several times slower."""
+    return (cfg.memory_whisper_model or cfg.whisper_model) if quality == "best" else cfg.whisper_model
+
+
+def _whisper(cfg: Config, audio, quality: str = "fast", **kw) -> dict:
+    """mlx_whisper.transcribe with the model for this quality (falls back to the normal one if the big one
+    can't be loaded, e.g. no internet for the first download). Options this mlx-whisper doesn't know are
+    left out."""
     import mlx_whisper  # type: ignore
 
     try:
@@ -427,7 +436,7 @@ def _whisper(cfg: Config, audio, **kw) -> dict:
         params, open_kw = {}, True
     base = ("language", "task", "condition_on_previous_text", "verbose", "path_or_hf_repo")
     kw = {k: v for k, v in kw.items() if k in params or k in base or (open_kw and k in ("language", "task"))}
-    models = [m for m in dict.fromkeys([model_for(cfg), cfg.whisper_model]) if _model_ok.get(m) is not False]
+    models = [m for m in dict.fromkeys([model_for(cfg, quality), cfg.whisper_model]) if _model_ok.get(m) is not False]
     err: Exception | None = None
     for m in models or [cfg.whisper_model]:
         try:
@@ -443,34 +452,49 @@ def _whisper(cfg: Config, audio, **kw) -> dict:
     raise RuntimeError(f"Whisper couldn't load a model: {err}")
 
 
-def transcribe_samples(cfg: Config, samples, mode: str = "mixed", prompt: str = "", offset: float = 0.0,
-                       vocab_terms_: set[str] | None = None, progress=None) -> list[dict]:
-    """[{start, end, text}] (seconds + offset) for 16 kHz samples, piece by piece."""
-    mode = LEGACY.get(mode, mode) if mode not in MODES else mode
-    language, task = MODES.get(mode, MODES["mixed"])
-    out: list[dict] = []
-    pieces = speech_pieces(samples)
-    for k, (a, b) in enumerate(pieces):
-        if progress:
-            progress(k, len(pieces))
-        chunk = samples[int(a * SR):int(b * SR)]
-        if loudest_db(chunk) < SILENCE_DB:
-            continue
-        res = _whisper(cfg, chunk, language=language, task=task, initial_prompt=prompt or None,
-                       condition_on_previous_text=False, verbose=None, temperature=(0.0, 0.2, 0.4, 0.6),
-                       compression_ratio_threshold=2.2, logprob_threshold=-1.0, no_speech_threshold=0.6)
-        segs = [dict(x, start=float(x.get("start") or 0) + a + offset, end=float(x.get("end") or 0) + a + offset)
-                for x in res.get("segments", [])]
-        if not segs and (res.get("text") or "").strip():
-            segs = [{"start": a + offset, "end": b + offset, "text": res["text"]}]
-        out += clean_segments(segs, vocab_terms_)
+def _mode(mode: str) -> tuple[str, str]:
+    mode = mode if mode in MODES else LEGACY.get(mode, "mixed")
+    return MODES.get(mode, MODES["mixed"])
+
+
+def transcribe_piece(cfg: Config, samples, a: float, b: float, mode: str = "mixed", prompt: str = "",
+                     vocab_terms_: set[str] | None = None, quality: str = "fast") -> list[dict]:
+    """Cleaned [{start, end, text}] (seconds in `samples`) for the stretch a..b (at most ~30 s)."""
+    chunk = samples[int(a * SR):int(b * SR)]
+    if len(chunk) == 0 or loudest_db(chunk) < SILENCE_DB:
+        return []
+    language, task = _mode(mode)
+    res = _whisper(cfg, chunk, quality=quality, language=language, task=task, initial_prompt=prompt or None,
+                   condition_on_previous_text=False, verbose=None, temperature=TEMPERATURES,
+                   compression_ratio_threshold=2.4, logprob_threshold=-1.0, no_speech_threshold=0.6)
+    segs = [dict(x, start=float(x.get("start") or 0) + a, end=float(x.get("end") or 0) + a)
+            for x in res.get("segments", [])]
+    if not segs and (res.get("text") or "").strip():
+        segs = [{"start": a, "end": b, "text": res["text"]}]
+    return clean_segments(segs, vocab_terms_)
+
+
+def merge_unclear(segs: list[dict]) -> list[dict]:
     merged: list[dict] = []
-    for s in out:  # [unclear] next to [unclear] once
+    for s in segs:  # [unclear] next to [unclear] once
         if merged and s["text"] == UNCLEAR and merged[-1]["text"] == UNCLEAR:
             merged[-1]["end"] = s["end"]
         else:
             merged.append(s)
     return merged
+
+
+def transcribe_samples(cfg: Config, samples, mode: str = "mixed", prompt: str = "", offset: float = 0.0,
+                       vocab_terms_: set[str] | None = None, progress=None, quality: str = "fast") -> list[dict]:
+    """[{start, end, text}] (seconds + offset) for 16 kHz samples, piece by piece."""
+    out: list[dict] = []
+    pieces = speech_pieces(samples)
+    for k, (a, b) in enumerate(pieces):
+        if progress:
+            progress(k, len(pieces))
+        out += [dict(x, start=x["start"] + offset, end=x["end"] + offset)
+                for x in transcribe_piece(cfg, samples, a, b, mode, prompt, vocab_terms_, quality)]
+    return merge_unclear(out)
 
 
 def words(text: str) -> int:

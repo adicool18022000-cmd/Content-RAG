@@ -5,9 +5,10 @@ stop talking. It records continuously and uploads the audio every few seconds pl
 which event was on screen when; a crash loses at most a few seconds and the session can be finished
 later. When you press Finish:
 
-1. the recording is cut where the slideshow moved on, and each event's part is turned into text by
-   Whisper on this Mac, with the language set (Hindi + English or English, never guessed) and that
-   event's places and people as vocabulary (voice.py removes invented lines, loops and wrong scripts),
+1. Whisper on this Mac turns the recording into text in pieces of ~28 s (silence skipped), with the
+   language set (Hindi + English or English, never guessed) and the places and people of the events on
+   screen as vocabulary (voice.py removes invented lines, loops and wrong scripts); each sentence goes to
+   the event that was on screen while it was said,
 2. an AI retells each event's words as a memory draft (the whole story, not a summary, plus what it
    meant, feeling, importance, people, chapter, for content or not, open questions): Claude through your
    Claude Code login if available, else Gemini, else your words are kept as they are,
@@ -356,15 +357,19 @@ def _wav(src: Path, dest: Path) -> None:
         raise RuntimeError(f"couldn't read the recording: {r.stderr.strip()[-200:]}")
 
 
-def _transcribe(cfg: Config, conn, s: dict, audio: Path, mode: str, status) -> list[dict]:
-    """Each event's part of the recording on its own, with that event's names as vocabulary. Cut where the
-    slideshow moved on (at the quietest moment nearby, so no word is split). Saved as it goes: an
-    interrupted session continues where it stopped."""
+def _clock(t: float) -> str:
+    t = int(t)
+    return f"{t // 60}:{t % 60:02d}"
+
+
+def _transcribe(cfg: Config, conn, s: dict, audio: Path, mode: str, status, quality: str = "fast") -> list[dict]:
+    """The recording in pieces of at most ~28 s (cut at quiet moments, silence skipped), each with the names
+    of the events on screen during it as vocabulary; every sentence then goes to the event that was on
+    screen. Saved as it goes: an interrupted session continues where it stopped."""
     from . import voice
     from .memories import event_terms
 
-    parts = runs(s["timeline"])
-    if not parts:
+    if not s["timeline"]:
         return []
     status("processing", "Turning your voice into text on this Mac…")
     with tempfile.TemporaryDirectory(prefix="crag-story-") as d:
@@ -372,35 +377,38 @@ def _transcribe(cfg: Config, conn, s: dict, audio: Path, mode: str, status) -> l
         _wav(audio, wav)
         samples = voice.load_wav(wav)
     total = len(samples) / voice.SR
-    cuts = [0.0]
-    for k in range(1, len(parts)):
-        around = min(0.75, (parts[k]["end"] - parts[k]["start"]) / 2, (parts[k - 1]["end"] - parts[k - 1]["start"]) / 2)
-        cuts.append(max(cuts[-1], voice.quiet_point(samples, parts[k]["start"], max(0.0, around))))
-    cuts.append(max(cuts[-1], total))
+    pieces = voice.speech_pieces(samples)
+    parts = runs(s["timeline"])
     vocab = voice.vocabulary(cfg, conn)
     terms = voice.vocab_terms(vocab)
     partial = s.get("partial") or {}
-    if partial.get("voice") == VOICE_VERSION and partial.get("mode") == mode:
-        segs, start = partial["segments"], partial["runs"]
+    if (partial.get("voice"), partial.get("mode"), partial.get("quality")) == (VOICE_VERSION, mode, quality):
+        segs, start = partial["segments"], partial["pieces"]
     else:
         segs, start = [], 0
-    first = not voice._model_ok
-    for k in range(start, len(parts)):
-        a, b = cuts[k], cuts[k + 1]
-        status("processing", f"Turning your voice into text on this Mac (event {k + 1} of {len(parts)})…"
-               + (" The first time, the voice model is downloaded (about 3 GB)." if first else ""))
-        if b - a >= 0.3:
-            eid = parts[k]["event_id"]
-            prompt = voice.prompt_for(vocab, event_terms(cfg, conn, eid))
-            segs += [dict(x, event_id=eid) for x in voice.transcribe_samples(
-                cfg, samples[int(a * voice.SR):int(b * voice.SR)], mode, prompt, offset=a, vocab_terms_=terms)]
-            first = False
-        s["partial"] = {"voice": VOICE_VERSION, "mode": mode, "runs": k + 1, "segments": segs}
+    names: dict[str, list[str]] = {}
+    t0, said = time.time(), 0.0
+    first = not voice._model_ok and quality == "best"
+    for k in range(start, len(pieces)):
+        a, b = pieces[k]
+        left = ""
+        if said > 20:  # after a bit: how long the rest will take at this speed
+            mins = sum(y - x for x, y in pieces[k:]) * (time.time() - t0) / said / 60
+            left = f", about {max(1, round(mins))} min left"
+        status("processing", f"Turning your voice into text on this Mac: {_clock(a)} of {_clock(total)}{left}…"
+               + (" The first time, the accurate voice model is downloaded (about 3 GB)." if first else ""))
+        on_screen = list(dict.fromkeys(r["event_id"] for r in parts if r["start"] < b and r["end"] > a))
+        extra = [t for eid in on_screen[:4] for t in names.setdefault(eid, event_terms(cfg, conn, eid))]
+        for x in voice.transcribe_piece(cfg, samples, a, b, mode, voice.prompt_for(vocab, extra), terms, quality):
+            segs.append(dict(x, event_id=_entry(x, s["timeline"])["event_id"]))
+        said += b - a
+        first = False
+        s["partial"] = {"voice": VOICE_VERSION, "mode": mode, "quality": quality, "pieces": k + 1, "segments": segs}
         _save(cfg, s)
-    return segs
+    return voice.merge_unclear(segs)
 
 
-def process(cfg: Config, sid: str, mode: str = "mixed") -> dict:
+def process(cfg: Config, sid: str, mode: str = "mixed", quality: str = "fast") -> dict:
     """Transcribe -> split by event -> drafts. Runs in a background thread (see finish)."""
     from . import voice
     from .db import connect
@@ -417,7 +425,7 @@ def process(cfg: Config, sid: str, mode: str = "mixed") -> dict:
     try:
         segments: list[dict] = s.get("segments") or []
         if s.get("voice") != VOICE_VERSION and audio.exists() and audio.stat().st_size > 1500:
-            segments = _transcribe(cfg, conn, s, audio, mode, status)
+            segments = _transcribe(cfg, conn, s, audio, mode, status, quality)
             s.update(segments=segments, voice=VOICE_VERSION)
             s.pop("partial", None)
             _save(cfg, s)
@@ -479,7 +487,8 @@ def process(cfg: Config, sid: str, mode: str = "mixed") -> dict:
         conn.close()
 
 
-def finish(cfg: Config, sid: str, timeline: list, marks: dict, mode: str = "mixed", redo: bool = False) -> dict:
+def finish(cfg: Config, sid: str, timeline: list, marks: dict, mode: str = "mixed", redo: bool = False,
+           quality: str = "fast") -> dict:
     """Stop recording and process in the background (the page polls the session). redo: transcribe the
     recording again (e.g. drafts made with the old voice-to-text, or another language picked)."""
     update(cfg, sid, timeline, marks)
@@ -495,7 +504,7 @@ def finish(cfg: Config, sid: str, timeline: list, marks: dict, mode: str = "mixe
 
     def run():
         try:
-            process(cfg, sid, mode)
+            process(cfg, sid, mode, quality)
         except Exception:  # noqa: BLE001 - state 'error' is saved for the page
             pass
 

@@ -33,7 +33,7 @@ class Config:
     roots: list[Root]
     timezone: str = "Asia/Kolkata"
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    memory_whisper_model: str = "mlx-community/whisper-large-v3-mlx"  # your spoken memories: slower, better Hindi
+    memory_whisper_model: str = "mlx-community/whisper-large-v3-mlx"  # memories, "Most accurate": slower, better Hindi
     language: str = "hi"
     transcribe_enabled: bool = True
     backend: str = "gemini"  # gemini | claude (API key) | claude-code (Claude subscription)

@@ -407,7 +407,8 @@ How the vault learns what things meant (the "brain"):
   photo; saying "photo 3 is…" works too. One recording runs for the whole session and is saved to the drive every 3 seconds;
   an interrupted session can be finished later. Before you've said anything, a big event stays on screen
   longer (and while you browse its photos), so a long story doesn't land on the next slide. On **Finish**,
-  each event's part of the recording is turned into text by Whisper on your Mac, and Claude (your Claude
+  the recording is turned into text by Whisper on your Mac (each sentence goes to the event that was on
+  screen), and Claude (your Claude
   Code login; else Gemini; else your words as said) writes each memory: the whole story as you told it
   (not a summary), what it meant, feeling, importance, people, chapter, whether it's for content, and
   open questions about what it couldn't make out. You check them on one screen, where **Belongs to** moves
@@ -415,9 +416,10 @@ How the vault learns what things meant (the "brain"):
   `library/story/audio/` (each memory notes where in the recording it was told), so they can be redone.
 - **Voice to text** (Story mode and 🎙 Speak, `contentrag/voice.py`): you pick **Hindi + English** (mix
   freely; recommended), **English only**, or **Hindi → English text** (shorter: loses details). The
-  language is never guessed: guessing is what turned Hinglish into Korean, Russian or Italian. Memories
-  use the big Whisper model (`[transcribe] memory_model`, large-v3, ~3 GB once; slower than turbo, much
-  better at Hindi). Whisper is told your people, places, folders and the event on screen, plus your own
+  language is never guessed: guessing is what turned Hinglish into Korean, Russian or Italian. **Voice to
+  text: Fast** (default) uses the normal turbo model; **Most accurate** uses `[transcribe] memory_model`
+  (large-v3, ~3 GB once), better with names but several times slower. Story mode shows how far it is and
+  how long is left. Whisper is told your people, places, folders and the events on screen, plus your own
   words from `library/vocabulary.txt` (one per line; `Mania -> Manya` for a name it keeps mishearing;
   `crag memories vocabulary` shows them). The audio is cut into pieces of at most ~28 s at quiet moments,
   silence is skipped, and lines in a wrong script or language, loops, "foreign" and invented lines
