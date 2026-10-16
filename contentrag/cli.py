@@ -417,10 +417,14 @@ def cmd_memories(args):
     cfg = load_config(args.config)
     conn = connect(cfg.db_path)
     try:
-        if args.action == "repair":
+        if args.action == "repair" and args.undo:
+            from .memory_repair import undo
+
+            print(json.dumps(undo(cfg, conn), indent=2))
+        elif args.action == "repair":
             from .memory_repair import repair
 
-            result = repair(cfg, conn, dry_run=args.dry_run, force=args.force)
+            result = repair(cfg, conn, dry_run=args.dry_run, force=args.force, place=not args.no_move)
             print(json.dumps(result, indent=2, ensure_ascii=False))
         elif args.action == "move":
             from .memories import move_memory
@@ -640,6 +644,8 @@ def main(argv=None):
     sp.add_argument("events", nargs="*", help="for move: the event id it's on, then the one it belongs to")
     sp.add_argument("--dry-run", action="store_true", help="only report what would change")
     sp.add_argument("--force", action="store_true", help="also memories repaired before")
+    sp.add_argument("--no-move", action="store_true", help="don't move stories told on the wrong event")
+    sp.add_argument("--undo", action="store_true", help="put back the notes as they were before the last repair")
     sp.set_defaults(fn=cmd_memories)
 
     sp = sub.add_parser("ui", help="local dashboard in your browser (http://127.0.0.1:8765)")

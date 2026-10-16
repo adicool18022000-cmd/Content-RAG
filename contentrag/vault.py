@@ -358,6 +358,7 @@ def read_memories(vault: Path) -> dict[str, dict]:
                                "era": fm.get("era", ""), "meaning": "" if meaning == "(not told yet)" else meaning,
                                "content": (fm.get("content") or "yes").lower() not in ("no", "false"),
                                "retell": (fm.get("needs_retelling") or "").lower() in ("yes", "true"),
+                               "repaired": fm.get("repaired", ""),
                                "date": fm.get("date", "")}
     return out
 
@@ -378,7 +379,8 @@ def event_memory(ev: list, memories: dict) -> dict | None:
             "importance": max(x["importance"] for x in found),
             "era": next((x["era"] for x in found if x["era"]), ""),
             "meaning": "\n\n".join(x["meaning"] for x in found if x["meaning"]),
-            "content": any(x["content"] for x in found), "retell": any(x.get("retell") for x in found)}
+            "content": any(x["content"] for x in found), "retell": any(x.get("retell") for x in found),
+            "repaired": max((x.get("repaired") or "" for x in found), default="")}
 
 
 def _write_interview_queue(gen: Path, summaries: list[dict], n: int = 40) -> None:

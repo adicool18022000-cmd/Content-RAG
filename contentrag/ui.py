@@ -347,7 +347,12 @@ def make_handler(cfg: Config, job: Job):
                 if url.path == "/api/story/sessions":
                     from . import story
 
-                    return self._json({"sessions": story.sessions(cfg), "ai": story.ai_name(cfg)})
+                    from .memory_repair import last_backup
+
+                    last = last_backup(cfg)
+                    return self._json({"sessions": story.sessions(cfg), "ai": story.ai_name(cfg),
+                                       "repair": {k: last[k] for k in ("run", "changed", "created")} if last else None,
+                                       "repair_running": job.running and job.name == "repair_memories"})
                 if url.path == "/api/story/session":
                     from . import story
 
@@ -490,6 +495,18 @@ def make_handler(cfg: Config, job: Job):
                     for k in ("absorb", "extra_sections"):  # only for move_memory, never from the page
                         body.pop(k, None)
                     return self._json(save_memory(cfg, conn, str(body.get("id") or ""), body))
+                except ValueError as e:
+                    return self._json({"error": str(e)}, 400)
+                finally:
+                    conn.close()
+            if url.path == "/api/memories/repair-undo":
+                from .memory_repair import undo
+
+                if job.running and job.name == "repair_memories":
+                    return self._json({"error": "the repair is still running: stop it first"}, 409)
+                conn = connect(cfg.db_path)
+                try:
+                    return self._json(undo(cfg, conn))
                 except ValueError as e:
                     return self._json({"error": str(e)}, 400)
                 finally:

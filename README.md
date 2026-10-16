@@ -422,16 +422,21 @@ How the vault learns what things meant (the "brain"):
   `crag memories vocabulary` shows them). The audio is cut into pieces of at most ~28 s at quiet moments,
   silence is skipped, and lines in a wrong script or language, loops, "foreign" and invented lines
   ("Thank you.") are removed (marked `[unclear]` where words were lost).
-- **Repair** (`crag memories repair`, or *Check & repair* under Story mode): memories saved with the old
-  voice-to-text are checked. Damaged ones, and long tellings that were saved as a short summary, get
-  *What happened* written again in full from your cleaned words (the earlier text stays in the note
-  under *Earlier versions (voice-to-text errors)*; unclear points go to *Open questions*). The ones that
-  lost most of what you said are marked `needs_retelling: yes`: Story mode → *Memories that need telling
-  again* plays just those, and the One by one list has a *Need telling again* filter. Stories that name a
-  nearby event's place or occasion are listed as *maybe on the wrong event*; **Move it there** (One by
-  one) moves a memory, combining it with one already there. `--dry-run` only writes the report
-  (`LifeVault/_generated/Memory repair.md`). Recordings of sessions saved before this were deleted then,
-  so those can only be repaired from their text, or told again.
+- **Repair** (`crag memories repair`, or *Check & repair* under Story mode) fixes the memories told before
+  the voice fixes. Step 1: for each one told in Story mode, the AI reads what you said next to the events
+  just before and after, and moves what clearly belongs elsewhere (it names that event's place or
+  occasion, or continues the story before): the old slideshow often moved on while you were still talking,
+  so a story could sit on the wrong event or be split over several. Step 2: every memory told in Story
+  mode before the fix (and every damaged one) gets *What happened* written again in full from your
+  cleaned words, not a summary; unclear points go to *Open questions*, the earlier text stays in the note
+  under *Earlier versions (voice-to-text errors)*. Memories that lost most of what you said are marked
+  `needs_retelling: yes` (Story mode → *Memories that need telling again*; One by one filters *Need telling
+  again* and *Rewritten by the repair*). Every note is copied as it was to `Memories/_before repair/<time>/`
+  before its first change: **Undo last repair** (or `crag memories repair --undo`) puts them back. Each
+  batch is saved as it's done, a Claude usage limit is waited out, and a stopped run continues where it
+  stopped. `--dry-run` only writes the report (`LifeVault/_generated/Memory repair.md`); `--no-move` skips
+  step 1. Recordings of sessions saved before the fix were deleted then, so those are repaired from their
+  text; what came out in a wrong script can only be told again.
 - **One by one** (`crag ui` → Memories): your events in date and time order. For each one you see
   the photos and play the videos, then tell the story: typed, or with 🎙 Speak, which is transcribed
   by Whisper on your Mac (pick Hindi + English, English, or Hindi → English text). macOS Dictation (Fn twice)

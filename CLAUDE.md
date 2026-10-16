@@ -16,8 +16,9 @@ content with Claude. Runs on the creator's Mac (M5, 32 GB), footage on external 
   loops, "foreign", phantom lines) → AI drafts = full retelling, not a summary (claude-code login, else Gemini, else
   words as said; size-based batches, summaries retried) → review (Belongs to / move) → `approve`; audio kept in
   `library_dir/story/audio/`. `crag memories repair` (`memory_repair.py`) fixes notes from the old pipeline (text
-  only; old notes keep `## Earlier versions (voice-to-text errors)`, flag `needs_retelling`); `move_memory` /
-  `suggest_move` for stories told on the wrong event.
+  only): AI placement by sentence ranges moves what was told on the wrong event, then every old Story-mode note
+  is rewritten in full (`## Earlier versions (voice-to-text errors)`, `needs_retelling`); notes are backed up to
+  `Memories/_before repair/<time>/` with a manifest (`--undo`). `move_memory` / `suggest_move` for single moves.
 - Skills: `.claude/skills/find-clips`, `broll-plan`, `life-interview`.
 - Tests: `pytest -q` (needs ffmpeg; no network).
 - AI description has three backends chosen by `[describe] backend` (`crag backend <name>`, the

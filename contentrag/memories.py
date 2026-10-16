@@ -67,6 +67,7 @@ def list_events(cfg: Config, conn) -> dict:
                     "done": bool(mem), "importance": mem["importance"] if mem else 0,
                     "content": mem["content"] if mem else True,
                     "retell": bool(mem and mem["retell"]),  # voice-to-text was too damaged: tell it again
+                    "repaired": (mem or {}).get("repaired", ""),  # written again by `crag memories repair`
                     "hidden": sum(1 for m in ev if m["id"] in with_hidden),  # photos/videos with people you hid
                     "allowed": sum(1 for m in ev if m["id"] in allowed)})  # ...that you allowed in this memory
     return {"events": out, "done": sum(1 for e in out if e["done"]), "feelings": FEELINGS,

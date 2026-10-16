@@ -1697,6 +1697,10 @@ def test_memory_repair_and_move(env, monkeypatch):
 
     def fake_ask(cfg, ai, prompt, schema, system):
         data = _json.loads(prompt)
+        if schema is memory_repair.PLACE_SCHEMA:  # step 1: everything stays where it is
+            return {"notes": [{"id": n["id"], "ranges": [{"from": 1, "to": len(n["sentences"]), "sure": False,
+                                                          "event": n["saved_on"]["event"], "why": ""}]}
+                              for n in data["memories"]]}
         asked.append(data)
         return {"memories": [{"id": n["id"], "story": "I went to college with Manya. " + "We came back to the hostel "
                               "and ate. " * 3, "questions": ["Which college was it?"], "people": ["Manya"]}
@@ -1754,4 +1758,89 @@ def test_memory_repair_and_move(env, monkeypatch):
     assert memories.suggest_move(cfg, conn, "2-0", "We had chai with friends.") is None
     near = memories.nearby_events(cfg, conn, "2-0", n=1)
     assert [x["id"] for x in near] == ["1-0", "2-0", "3-0"] and near[1]["this"]
+
+
+def test_memory_repair_moves_and_undo(env, monkeypatch):
+    import json as _json
+
+    from contentrag import claude_code, memories, memory_repair, story
+
+    cfg, conn = _analysed(env, monkeypatch)
+    evs = memories.list_events(cfg, conn)["events"]
+    a, b = evs[0]["id"], evs[1]["id"]
+    # told while a was on screen: one sentence about a, then the story of b (the slideshow moved on too early)
+    told = ("We had chai at the station before leaving and Rahul was late as always, we almost missed the train. "
+            "Next morning we reached the Orange guest house. "
+            "The guest house uncle gave us parathas and we laughed a lot about the train.")
+    memories.save_memory(cfg, conn, a, {"story": "Chai at the station.", "meaning": "Start of the trip.",
+                                        "importance": 3, "told": told, "source": "story mode"})
+    na = cfg.vault_dir / memories.event_detail(cfg, conn, a)["memory"]["note"]
+    original = na.read_text()
+    plan = {"split": True}
+    calls = {"place": 0, "write": 0}
+
+    def fake_ask(cfg, ai, prompt, schema, system):
+        data = _json.loads(prompt)
+        if schema is memory_repair.PLACE_SCHEMA:
+            calls["place"] += 1
+            if calls["place"] == 1 and plan.get("limit"):  # Claude's usage limit: waited out, then it continues
+                raise claude_code.ClaudeCodeError("usage limit", 429, time.time() + 5)
+            out = []
+            for n in data["memories"]:
+                own, k = n["saved_on"]["event"], len(n["sentences"])
+                other = next(c["event"] for c in n["candidates"])
+                ranges = ([{"from": 1, "to": 1, "event": own, "sure": True, "why": ""},
+                           {"from": 2, "to": k, "event": other, "sure": True, "why": "names the guest house"}]
+                          if plan["split"] else [{"from": 1, "to": k, "event": other, "sure": True, "why": "all of it"}])
+                out.append({"id": n["id"], "ranges": ranges})
+            return {"notes": out}
+        calls["write"] += 1
+        return {"memories": [{"id": n["id"], "story": "I " + n["as_told"], "questions": [], "people": []}
+                             for n in data["notes"]]}
+    monkeypatch.setattr(story, "ai_name", lambda cfg: "claude-code")
+    monkeypatch.setattr(story, "ask_ai", fake_ask)
+    waits = []
+    monkeypatch.setattr(memory_repair, "_sleep", lambda sec, stop: waits.append(sec) or False)
+
+    res = memory_repair.repair(cfg, conn, log=lambda *_: None)
+    assert res["moved"] == 1 and res["backup"]
+    ta = na.read_text()
+    assert "## As told (voice)\nWe had chai at the station before leaving and" in ta and "guest house" not in \
+        ta.split("## As told (voice)")[1].split("## ")[0]
+    assert "## Moved to other events" in ta and "## What happened\nI We had chai" in ta  # rewritten in full
+    mb = memories.event_detail(cfg, conn, b)["memory"]
+    nb = cfg.vault_dir / mb["note"]
+    tb = nb.read_text()
+    assert "Orange guest house" in tb.split("## As told (voice)")[1] and "## Moved here" in tb
+    assert "parathas" in mb["story"] and "repaired: " in tb
+    assert memory_repair.repair(cfg, conn, log=lambda *_: None)["moved"] == 0  # checked once: not again
+
+    # undo puts everything back as it was
+    out = memory_repair.undo(cfg, conn)
+    assert out["restored"] >= 1 and out["removed"] == 1
+    assert na.read_text() == original and memories.event_detail(cfg, conn, b)["memory"] is None
+    with pytest.raises(ValueError):
+        memory_repair.undo(cfg, conn)  # nothing left to undo
+
+    # all of it is about the other event: the whole memory moves (meaning too), after a usage-limit wait
+    plan.update(split=False, limit=True)
+    calls["place"] = 0
+    res = memory_repair.repair(cfg, conn, log=lambda *_: None)
+    assert res["moved"] == 1 and waits and 60 <= waits[0] <= 6 * 3600
+    assert memories.event_detail(cfg, conn, a)["memory"] is None
+    mb = memories.event_detail(cfg, conn, b)["memory"]
+    assert "Start of the trip." in mb["meaning"] and "parathas" in mb["story"]
+    assert list((cfg.vault_dir / "Memories" / "_merged").rglob(na.name))
+    memory_repair.undo(cfg, conn)
+    assert na.read_text() == original
+
+    # memories told in Story mode before the fix are all written again in full, not only damaged ones;
+    # a memory typed in One by one is left alone
+    plan.update(split=None, limit=False)
+    monkeypatch.setattr(memory_repair, "_place_all", lambda *a, **k: [])
+    memories.save_memory(cfg, conn, b, {"story": "I typed this myself.", "importance": 2})
+    res = memory_repair.repair(cfg, conn, log=lambda *_: None)
+    assert res["old"] == 1 and res["rewritten"] == 1
+    assert "I typed this myself." in memories.event_detail(cfg, conn, b)["memory"]["story"]
+    assert next(e for e in memories.list_events(cfg, conn)["events"] if e["id"] == a)["repaired"]
 

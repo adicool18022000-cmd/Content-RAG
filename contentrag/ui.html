@@ -554,7 +554,7 @@ dialog code { font: 12px var(--mono); color: var(--tertiary); word-break: break-
         <div class="toolbar">
           <select class="field" id="memYear" aria-label="Year"></select>
           <select class="field" id="memShow" aria-label="Which events">
-            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option><option value="hidden">With hidden people</option><option value="retell">Need telling again</option>
+            <option value="all">All events</option><option value="todo">Not told yet</option><option value="done">Told</option><option value="hidden">With hidden people</option><option value="retell">Need telling again</option><option value="repaired">Rewritten by the repair</option>
           </select>
         </div>
         <div class="muted" id="memProgress" style="font-size:13px;padding:0 4px">Loading…</div>
@@ -667,7 +667,7 @@ function renderMemList() {
   let month = "", html = "";
   MEM.events.forEach((e, i) => {
     if (e.date.slice(0, 4) !== y) return;
-    if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden) || (show === "retell" && !e.retell)) return;
+    if ((show === "todo" && e.done) || (show === "done" && !e.done) || (show === "hidden" && !e.hidden) || (show === "retell" && !e.retell) || (show === "repaired" && !e.repaired)) return;
     const m = e.date.slice(0, 7);
     if (m !== month) { month = m; html += `<div class="mem-month">${new Date(m + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})}</div>`; }
     html += `<button class="mem-ev${e.done ? " done" : ""}${e.content === false ? " off" : ""}${e.hidden ? " hp" : e.allowed ? " ok" : ""}" data-i="${i}" aria-current="${i === MEM.idx}">
@@ -984,8 +984,9 @@ async function renderStorySetup() {
       </ul>
     </div>
     <div class="card" id="repairCard" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div style="flex:1;min-width:240px"><b>Repair memories saved with the old voice-to-text</b>
-        <div class="muted" style="font-size:13px" id="repairMsg">Cleans wrong scripts, loops and “Thank you.” lines, writes damaged or summarised stories again in full from your words (the old text is kept), and lists the ones to tell again or that sit on the wrong event.</div></div>
+      <div style="flex:1;min-width:240px"><b>Repair the memories you told before the fix</b>
+        <div class="muted" style="font-size:13px" id="repairMsg">Moves stories told while the wrong event was on screen to the event they're about, writes every one again in full from your words (no more summaries; wrong scripts, loops and “Thank you.” removed), and marks the ones that lost too much to tell again. Every note is backed up first. Takes a while: leave this running, the Mac awake.</div></div>
+      ${sj.repair ? `<button class="btn plain small" type="button" id="repairUndo" title="Puts back the ${sj.repair.changed} notes as they were before the repair of ${esc(sj.repair.run)}">Undo last repair</button>` : ""}
       <button class="btn small" type="button" id="repairGo">Check &amp; repair</button></div>`;
   $("sLang").value = langOf("story.lang");
   fillMics($("sMic"));
@@ -998,6 +999,12 @@ async function renderStorySetup() {
   $("storyView").querySelectorAll("[data-redo]").forEach(b => b.onclick = async () => {
     await post("/api/story/finish", {id: b.dataset.redo, mode: $("sLang").value, redo: true}); openReview(b.dataset.redo); });
   $("repairGo").onclick = runRepair;
+  if (sj.repair_running) followRepair();
+  if ($("repairUndo")) $("repairUndo").onclick = async () => {
+    if (!confirm("Put back all notes as they were before the last repair? Changes you made to those notes since then are lost too.")) return;
+    const j = await (await post("/api/memories/repair-undo", {})).json();
+    if (!j.ok) { toast(j.error || "Couldn't undo"); return; }
+    toast(`${j.restored} notes put back`); MEM.events = []; await loadMemories(); renderStorySetup(); };
   $("storyView").querySelectorAll("[data-discard]").forEach(b => b.onclick = async () => {
     if (!confirm("Discard this session? What you said in it is deleted.")) return;
     await post("/api/story/discard", {id: b.dataset.discard}); renderStorySetup(); });
@@ -1289,23 +1296,32 @@ function renderReview(s) {
 }
 
 async function runRepair() {
-  if (!confirm("Check all saved memories and rewrite the ones damaged by the old voice-to-text?\n\nThe earlier text stays in each note. This uses your Claude login (or Gemini) and can take a while.")) return;
+  if (!confirm("Repair the memories told before the fix?\n\nStories on the wrong event are moved, and every one is written again in full from your words. Each note is backed up first (Undo last repair puts them back). This uses your Claude login (or Gemini), can take an hour or two, and waits by itself if a usage limit is reached.")) return;
   const j = await (await post("/api/run", {step: "repair_memories"})).json();
   if (!j.ok) { toast(j.message || j.error || "Couldn't start"); return; }
-  $("repairGo").disabled = true;
-  let since = (await (await fetch("/api/log?since=0")).json()).next;
+  followRepair();
+}
+let repairFollowing = false;
+async function followRepair() {  // shows the repair's progress in its card, also after coming back to the page
+  if (repairFollowing) return; repairFollowing = true;
+  if ($("repairGo")) { $("repairGo").disabled = true; $("repairGo").textContent = "Repairing…"; }
+  let since = Math.max(0, (await (await fetch("/api/log?since=0")).json()).next - 40), msg = "";
   for (;;) {
-    await new Promise(r => setTimeout(r, 2500));
     const l = await (await fetch(`/api/log?since=${since}`)).json().catch(() => null);
-    if (!l) continue;
-    since = l.next;
-    const last = l.lines.filter(x => x.includes("[repair]") || x.includes("ERROR")).pop();
-    if (last && $("repairMsg")) $("repairMsg").textContent = last.replace(/^\S+ \[repair\] /, "");
-    if (!l.running) break;
+    if (l) {
+      since = l.next;
+      const last = l.lines.filter(x => x.includes("[repair]") || x.includes("ERROR")).pop();
+      if (last) msg = last.replace(/^\S+ \[repair\] /, "");
+      if (msg && $("repairMsg")) $("repairMsg").textContent = msg;
+      if ($("repairGo")) { $("repairGo").disabled = true; $("repairGo").textContent = "Repairing…"; }
+      if (!l.running) break;
+    }
+    await new Promise(r => setTimeout(r, 2500));
   }
-  if ($("repairGo")) { $("repairGo").disabled = false; $("repairGo").textContent = "Check again"; }
-  if ($("repairMsg")) $("repairMsg").textContent += " The full list is in your Life Vault: _generated/Memory repair.md";
+  repairFollowing = false;
   MEM.events = []; await loadMemories();
+  if (!STORY.review && !STORY.live) await renderStorySetup();
+  if ($("repairMsg") && msg) $("repairMsg").textContent = msg + " The full list is in your Life Vault: _generated/Memory repair.md. In One by one, the filter “Rewritten by the repair” shows them.";
 }
 
 /* ------------------------------------------------------------- lightbox: look at one photo closely */
